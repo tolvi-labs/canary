@@ -2,7 +2,8 @@
 tags: [decision, canary]
 date: 2026-07-04
 repo: canary
-status: active
+status: superseded
+superseded_by: 2026-07-08-canary-reframe-test-selection
 ticket: none
 user_impact: none
 product_area: Prioritization
@@ -12,6 +13,8 @@ product_area: Prioritization
 
 **Date:** 2026-07-04
 **Repo:** canary
+
+> **Superseded 2026-07-08** by [[2026-07-08-canary-reframe-test-selection]]. The orphan problem is resolved not by reviving Compliance Canary but by reclaiming the name for vault-informed CI test selection, which compounds with Provenance + the vault by construction. The compliance concept below stays parked under its old scope and would need a new name if revived.
 
 ## Why
 
