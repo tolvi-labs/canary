@@ -14,6 +14,8 @@ supersedes: 2026-07-04-canary-internal-orphan-defer
 **Date:** 2026-07-08
 **Repo:** canary
 
+> **Refined 2026-07-22** by [[2026-07-22-canary-owns-impact-provenance-is-the-gate]] (this decision stays active). Provenance was repurposed to a capture-enforcement gate, so it no longer supplies a reachability-derived impact report; Canary now owns the impact report and receives declared provenance + vault governance from Provenance instead. The test-selection identity, coverage+bindings map, two-manifest model, and gate policy below are unchanged. The "boundary discipline that killed Guild" reference is stale — Guild was relaunched 2026-07-21 and shipped public 2026-07-22; the discipline stands, the "Guild is dead" framing does not.
+
 ## Why
 
 [[2026-07-04-canary-internal-orphan-defer]] benched Compliance Canary as an *ecosystem orphan* — real internal need, but no vault dependency and no compounding with the rest of the stack — and explicitly gated any revival on finding a way for Canary to compound. A Tolvi Labs positioning pass (personal brand vault, 2026-07-08) found that path, but not by rescuing the compliance tool: it **reclaims the name Canary for a different product — vault-informed CI test selection** — that consumes Provenance's impact output and is ranked by the vault. That tool compounds with the core bet by construction, so it clears the exact test the orphan-defer decision set. This banks the reframe and supersedes the defer.
