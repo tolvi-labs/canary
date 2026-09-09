@@ -122,6 +122,18 @@ func TestRun_MissingManifestFallsBackToFullSuite(t *testing.T) {
 	}
 }
 
+func TestRun_MergeGateSucceedsWithAllZerosBase(t *testing.T) {
+	// GitHub sets `before` to all-zeros on a branch's first push, which
+	// is not a resolvable git ref. The merge gate never reads the diff,
+	// so this must succeed rather than failing on ChangedFiles/ChangedRanges.
+	dir := setupRepo(t)
+	allZeros := "0000000000000000000000000000000000000000"
+	code := Run([]string{"--repo", dir, "--base", allZeros, "--head", "HEAD", "--gate", "merge"})
+	if code != 0 {
+		t.Fatalf("expected exit 0 for merge gate with an all-zeros base, got %d", code)
+	}
+}
+
 func TestRun_RequiresBaseFlag(t *testing.T) {
 	dir := setupRepo(t)
 	code := Run([]string{"--repo", dir})

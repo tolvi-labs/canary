@@ -52,15 +52,20 @@ func Run(args []string) int {
 		return 2
 	}
 
-	changedFiles, err := gitutil.ChangedFiles(*repoDir, *base, *head)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "canary check: %v\n", err)
-		return 2
-	}
-	changedRanges, err := gitutil.ChangedRanges(*repoDir, *base, *head)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "canary check: %v\n", err)
-		return 2
+	var changedFiles []string
+	var changedRanges map[string][]gitutil.LineRange
+	if *gateMode == "pr" {
+		var err error
+		changedFiles, err = gitutil.ChangedFiles(*repoDir, *base, *head)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "canary check: %v\n", err)
+			return 2
+		}
+		changedRanges, err = gitutil.ChangedRanges(*repoDir, *base, *head)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "canary check: %v\n", err)
+			return 2
+		}
 	}
 
 	decisions, err := vault.LoadDecisions(filepath.Join(*repoDir, "vault"))
