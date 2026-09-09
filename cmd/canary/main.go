@@ -6,7 +6,9 @@ import (
 
 	"github.com/tolvi-labs/canary/internal/cmdaudit"
 	"github.com/tolvi-labs/canary/internal/cmdcheck"
+	"github.com/tolvi-labs/canary/internal/cmdhook"
 	"github.com/tolvi-labs/canary/internal/cmdinit"
+	"github.com/tolvi-labs/canary/internal/cmdrefresh"
 )
 
 const version = "0.1.0"
@@ -26,6 +28,10 @@ func main() {
 		os.Exit(cmdaudit.Run(os.Args[2:]))
 	case "check":
 		os.Exit(cmdcheck.Run(os.Args[2:]))
+	case "refresh":
+		os.Exit(cmdrefresh.Run(os.Args[2:]))
+	case "hook":
+		os.Exit(cmdhook.Run(os.Args[2:]))
 	case "-h", "--help", "help":
 		printUsage()
 	default:
@@ -43,6 +49,6 @@ func printUsage() {
     canary init [--audit]
     canary audit
     canary check --base <ref> --head <ref> [--gate pr|merge|release]
-    canary refresh                                                     (not yet available)
-    canary hook install|uninstall                                      (not yet available)`)
+    canary refresh
+    canary hook install|uninstall`)
 }
