@@ -210,3 +210,36 @@ func TestBuild_DegradesCompileFailingPackageInsteadOfFailing(t *testing.T) {
 		t.Fatalf("expected both packages still listed, got: %v", m.Packages)
 	}
 }
+
+func TestRefresh_DegradedPackageCarriesForwardWhenNotTouched(t *testing.T) {
+	repoDir := copyFixtureDegradedRepo(t)
+
+	m, err := Build(repoDir)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	if len(m.DegradedPackages) != 1 || m.DegradedPackages[0] != "broken" {
+		t.Fatalf("expected [\"broken\"] after Build, got: %v", m.DegradedPackages)
+	}
+
+	// Touch only the healthy package — "broken" is not re-evaluated this
+	// round, so it must still show up as degraded afterward. This is the
+	// scenario the DegradedPackages field exists for: a package that
+	// stays broken across several unrelated refreshes must not silently
+	// drop off the list the moment some other package changes.
+	if err := os.WriteFile(filepath.Join(repoDir, "good", "good.go"), []byte("package good\n\nfunc Ok() int { return 2 }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "good", "good_test.go"), []byte("package good\n\nimport \"testing\"\n\nfunc TestOk(t *testing.T) {\n\tif Ok() != 2 {\n\t\tt.Fatal(\"bad\")\n\t}\n}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoDir, "commit", "-q", "-am", "tweak good")
+
+	updated, err := Refresh(m, repoDir, []string{"./good"})
+	if err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+	if len(updated.DegradedPackages) != 1 || updated.DegradedPackages[0] != "broken" {
+		t.Fatalf("expected \"broken\" to still be carried forward in DegradedPackages, got: %v", updated.DegradedPackages)
+	}
+}

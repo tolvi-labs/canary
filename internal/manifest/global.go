@@ -68,9 +68,10 @@ func Refresh(existing GlobalManifest, repoDir string, touchedPackages []string) 
 	// fails to compile this round keeps whatever it had before instead of
 	// losing its data to an aborted rebuild.
 	merged := GlobalManifest{
-		Coverage: existing.Coverage,
-		Tests:    append([]string{}, existing.Tests...),
-		Packages: unionSorted(existing.Packages, touchedPackages),
+		Coverage:         existing.Coverage,
+		Tests:            append([]string{}, existing.Tests...),
+		Packages:         unionSorted(existing.Packages, touchedPackages),
+		DegradedPackages: existing.DegradedPackages, // buildFromPackages carries this forward for anything not re-evaluated this round
 	}
 	return buildFromPackages(repoDir, modulePath, touchedPackages, merged)
 }
