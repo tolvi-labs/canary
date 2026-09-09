@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/tolvi-labs/canary/internal/cmdaudit"
+	"github.com/tolvi-labs/canary/internal/cmdinit"
 )
 
 const version = "0.1.0"
@@ -16,6 +19,10 @@ func main() {
 	switch os.Args[1] {
 	case "version":
 		fmt.Println("canary " + version)
+	case "init":
+		os.Exit(cmdinit.Run(os.Args[2:]))
+	case "audit":
+		os.Exit(cmdaudit.Run(os.Args[2:]))
 	case "-h", "--help", "help":
 		printUsage()
 	default:
@@ -30,8 +37,8 @@ func printUsage() {
 
   Usage:
     canary version
-    canary init [--audit]                                              (not yet available)
-    canary audit                                                       (not yet available)
+    canary init [--audit]
+    canary audit
     canary check --base <ref> --head <ref> [--gate pr|merge|release]   (not yet available)
     canary refresh                                                     (not yet available)
     canary hook install|uninstall                                      (not yet available)`)
