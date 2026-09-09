@@ -1,7 +1,7 @@
 # Tolvi Canary — Go-Forward Plan
 
-**Status:** Pre-build. Vault-informed CI test selection; the name is reclaimed. Active evidence-first probe. Canary now also owns the impact report (moved here from Provenance, which became the capture-gate).
-**Last updated:** 2026-07-22
+**Status:** v1 shipped. Vault-informed CI test selection; the name is reclaimed. Canary now also owns the impact report (moved here from Provenance, which became the capture-gate).
+**Last updated:** 2026-09-09
 
 ## One-line
 
@@ -24,7 +24,7 @@ The path forward was to **reclaim the name for a different product**: vault-info
 ## Lifecycle & gate policy
 
 - `canary init` — builds the globalManifest, or audits an existing suite (flags orphan tests + impacted-but-untested paths). "From 0" establishes structure/config/vault-bindings; it does not generate tests.
-- Commit-time (tolvi-commit) modifier — incrementally refreshes the globalManifest for touched symbols; plus a staleness check.
+- Commit-time refresh — Canary installs its own `.git/hooks/post-commit` shim via `canary hook install`, which calls `canary refresh` to incrementally rebuild the globalManifest for touched packages; plus a staleness check.
 - CI — computes the localManifest on the fly and gates:
   - **PR / feature branch → localManifest** (impacted subset; fast, and the engineer sees exactly what runs and why).
   - **Merge to main → globalManifest** (full suite; catches composition failures the moment they land).
@@ -51,4 +51,4 @@ This plan and the build kickoff prompt were reconciled on 2026-07-22: Canary now
 
 ## Next step
 
-Run `docs/test-selection-kickoff-prompt.md` in this repo to produce a plan for the thinnest slice, then harden it through Bastion before any code.
+v1 (scope A: CI test-selection, full stop) has shipped — see the README for the working command set. `docs/test-selection-kickoff-prompt.md` is kept as the historical record of how the thinnest slice was scoped before code existed. Scope B (the post-deploy canary-signal sentry) is the next thing to plan, hardened through Bastion before any code.
