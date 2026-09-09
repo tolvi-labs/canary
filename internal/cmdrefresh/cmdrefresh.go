@@ -60,6 +60,12 @@ func Run(args []string) int {
 		return 2
 	}
 	fmt.Printf("✓ Refreshed %d package(s)\n", len(touchedPackages))
+	if len(updated.DegradedPackages) > 0 {
+		fmt.Printf("⚠ %d package(s) could not be built for coverage and are excluded from selection-narrowing: %s\n", len(updated.DegradedPackages), strings.Join(updated.DegradedPackages, ", "))
+		for _, w := range updated.BuildWarnings {
+			fmt.Printf("  - %s\n", w)
+		}
+	}
 	return 0
 }
 

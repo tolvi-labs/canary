@@ -64,6 +64,30 @@ func TestToHuman_ListsSelectedTests(t *testing.T) {
 	}
 }
 
+func TestToJSON_IncludesDegradedPackages(t *testing.T) {
+	result := gate.Result{Gate: "pr", ManifestStatus: "fresh", DegradedPackages: []string{"broken"}}
+	raw, err := ToJSON(result, "", "")
+	if err != nil {
+		t.Fatalf("ToJSON failed: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	degraded, ok := parsed["degraded_packages"].([]interface{})
+	if !ok || len(degraded) != 1 || degraded[0] != "broken" {
+		t.Fatalf("unexpected degraded_packages: %v", parsed["degraded_packages"])
+	}
+}
+
+func TestToHuman_MentionsDegradedPackagesWhenPresent(t *testing.T) {
+	result := gate.Result{Gate: "pr", ManifestStatus: "fresh", DegradedPackages: []string{"broken"}}
+	out := ToHuman(result, "abc", "def")
+	if !strings.Contains(out, "Degraded packages") || !strings.Contains(out, "broken") {
+		t.Fatalf("expected degraded packages mentioned, got: %s", out)
+	}
+}
+
 func TestToHuman_MentionsNeverSkipBinding(t *testing.T) {
 	result := gate.Result{
 		Gate:           "pr",
