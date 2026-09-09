@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/tolvi-labs/canary/internal/audit"
 	"github.com/tolvi-labs/canary/internal/gate"
@@ -31,6 +32,12 @@ func Run(args []string) int {
 		return 2
 	}
 	fmt.Printf("✓ Built global manifest: %d packages, %d tests\n", len(m.Packages), len(m.Tests))
+	if len(m.DegradedPackages) > 0 {
+		fmt.Printf("⚠ %d package(s) could not be built for coverage and are excluded from selection-narrowing: %s\n", len(m.DegradedPackages), strings.Join(m.DegradedPackages, ", "))
+		for _, w := range m.BuildWarnings {
+			fmt.Printf("  - %s\n", w)
+		}
+	}
 
 	if !*withAudit {
 		return 0

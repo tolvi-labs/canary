@@ -29,12 +29,13 @@ type ImpactEntry struct {
 
 // Result is the outcome of one canary check/init/audit run.
 type Result struct {
-	Gate           string // "pr" | "merge" | "release" | "audit"
-	ManifestStatus string // "fresh" | "stale-fallback" | "partial-fallback"
-	SelectedTests  []SelectedTest
-	Impact         []ImpactEntry
-	Audit          *audit.Result
-	Problems       []bindings.Problem
+	Gate             string // "pr" | "merge" | "release" | "audit"
+	ManifestStatus   string // "fresh" | "stale-fallback" | "partial-fallback"
+	SelectedTests    []SelectedTest
+	Impact           []ImpactEntry
+	Audit            *audit.Result
+	Problems         []bindings.Problem
+	DegradedPackages []string
 }
 
 // Check runs the PR/merge/release gate. For "merge" and "release", the
@@ -54,6 +55,7 @@ func Check(
 	provReport *provenancereport.Report,
 ) Result {
 	result := Result{Gate: gateMode, ManifestStatus: "fresh"}
+	result.DegradedPackages = m.DegradedPackages
 
 	if gateMode != "pr" {
 		result.SelectedTests = fullSuite(m, "full-suite-gate")

@@ -129,6 +129,15 @@ func TestCheck_DegradedPackageForcesAllItsTests(t *testing.T) {
 	}
 }
 
+func TestCheck_ResultCarriesDegradedPackages(t *testing.T) {
+	m := testManifest()
+	m.DegradedPackages = []string{"broken"}
+	result := Check("pr", m, false, nil, nil, nil, nil)
+	if len(result.DegradedPackages) != 1 || result.DegradedPackages[0] != "broken" {
+		t.Fatalf("expected DegradedPackages to carry through from the manifest, got: %+v", result.DegradedPackages)
+	}
+}
+
 func TestCheck_ImpactIncludesProvenanceRisk(t *testing.T) {
 	m := testManifest()
 	changedRanges := map[string][]gitutil.LineRange{

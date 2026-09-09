@@ -17,10 +17,11 @@ type jsonReport struct {
 		Base string `json:"base"`
 		Head string `json:"head"`
 	} `json:"range"`
-	ManifestStatus string             `json:"manifest_status"`
-	SelectedTests  []jsonSelectedTest `json:"selected_tests"`
-	Impact         []jsonImpactEntry  `json:"impact"`
-	Audit          *jsonAudit         `json:"audit,omitempty"`
+	ManifestStatus   string             `json:"manifest_status"`
+	SelectedTests    []jsonSelectedTest `json:"selected_tests"`
+	Impact           []jsonImpactEntry  `json:"impact"`
+	Audit            *jsonAudit         `json:"audit,omitempty"`
+	DegradedPackages []string           `json:"degraded_packages"`
 }
 
 type jsonSelectedTest struct {
@@ -56,11 +57,12 @@ func emptyIfNil(s []string) []string {
 // ToJSON renders a gate.Result as the tolvi-canary-report-v1 JSON schema.
 func ToJSON(result gate.Result, base, head string) ([]byte, error) {
 	r := jsonReport{
-		Schema:         Schema,
-		Gate:           result.Gate,
-		ManifestStatus: result.ManifestStatus,
-		SelectedTests:  []jsonSelectedTest{},
-		Impact:         []jsonImpactEntry{},
+		Schema:           Schema,
+		Gate:             result.Gate,
+		ManifestStatus:   result.ManifestStatus,
+		SelectedTests:    []jsonSelectedTest{},
+		Impact:           []jsonImpactEntry{},
+		DegradedPackages: emptyIfNil(result.DegradedPackages),
 	}
 	r.Range.Base = base
 	r.Range.Head = head
@@ -94,6 +96,10 @@ func ToHuman(result gate.Result, base, head string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "canary %s: %s..%s\n", result.Gate, base, head)
 	fmt.Fprintf(&b, "Manifest: %s\n\n", result.ManifestStatus)
+
+	if len(result.DegradedPackages) > 0 {
+		fmt.Fprintf(&b, "Degraded packages (excluded from selection-narrowing): %s\n\n", strings.Join(result.DegradedPackages, ", "))
+	}
 
 	if len(result.SelectedTests) > 0 {
 		b.WriteString("Selected tests:\n")
