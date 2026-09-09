@@ -15,7 +15,7 @@ import (
 // SelectedTest is one test chosen to run, and why.
 type SelectedTest struct {
 	Test            string
-	Reason          string // "coverage" | "never-skip-binding" | "full-suite-gate" | "stale-manifest-fallback"
+	Reason          string // "coverage" | "never-skip-binding" | "full-suite-gate" | "stale-manifest-fallback" | "unmapped-code-fallback"
 	BindingDecision string // set only when Reason == "never-skip-binding"
 }
 
@@ -30,7 +30,7 @@ type ImpactEntry struct {
 // Result is the outcome of one canary check/init/audit run.
 type Result struct {
 	Gate           string // "pr" | "merge" | "release" | "audit"
-	ManifestStatus string // "fresh" | "stale-fallback"
+	ManifestStatus string // "fresh" | "stale-fallback" | "partial-fallback"
 	SelectedTests  []SelectedTest
 	Impact         []ImpactEntry
 	Audit          *audit.Result
@@ -63,6 +63,34 @@ func Check(
 	if manifestStale {
 		result.ManifestStatus = "stale-fallback"
 		result.SelectedTests = fullSuite(m, "stale-manifest-fallback")
+		return result
+	}
+
+	degradedDirs := make(map[string]bool, len(m.DegradedPackages))
+	for _, d := range m.DegradedPackages {
+		degradedDirs[d] = true
+	}
+	for file := range changedRanges {
+		if !strings.HasSuffix(file, ".go") {
+			continue
+		}
+		if _, ok := m.Coverage[file]; ok {
+			continue
+		}
+		// A file under a known degraded package isn't silently skipped —
+		// degradedPackageTests below already force-includes everything
+		// known about that package. Only a file the manifest has never
+		// heard of at all (not covered, not in a degraded package)
+		// triggers the full-suite fallback.
+		dir := ""
+		if idx := strings.LastIndex(file, "/"); idx >= 0 {
+			dir = file[:idx]
+		}
+		if degradedDirs[dir] {
+			continue
+		}
+		result.ManifestStatus = "partial-fallback"
+		result.SelectedTests = fullSuite(m, "unmapped-code-fallback")
 		return result
 	}
 

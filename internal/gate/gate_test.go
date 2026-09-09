@@ -86,6 +86,25 @@ func TestCheck_PRGate_BindingForcesUnrelatedTest(t *testing.T) {
 	}
 }
 
+func TestCheck_PRGate_UnmappedNewFileFallsBackToFullSuite(t *testing.T) {
+	m := testManifest()
+	changedRanges := map[string][]gitutil.LineRange{
+		"newpkg/newfile.go": {{Start: 1, End: 3}},
+	}
+	result := Check("pr", m, false, []string{"newpkg/newfile.go"}, changedRanges, nil, nil)
+	if result.ManifestStatus != "partial-fallback" {
+		t.Fatalf("expected partial-fallback, got %s", result.ManifestStatus)
+	}
+	if len(result.SelectedTests) != 2 {
+		t.Fatalf("expected the full suite (2 tests), got: %+v", result.SelectedTests)
+	}
+	for _, s := range result.SelectedTests {
+		if s.Reason != "unmapped-code-fallback" {
+			t.Fatalf("expected reason unmapped-code-fallback, got: %+v", s)
+		}
+	}
+}
+
 func TestCheck_DegradedPackageForcesAllItsTests(t *testing.T) {
 	m := testManifest()
 	m.DegradedPackages = []string{"broken"}
