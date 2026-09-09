@@ -129,6 +129,30 @@ func TestCheck_DegradedPackageForcesAllItsTests(t *testing.T) {
 	}
 }
 
+func TestCheck_DegradedPackageWithNoCoverageHistoryFallsBackToFullSuite(t *testing.T) {
+	m := testManifest()
+	m.DegradedPackages = []string{"broken"}
+	// Unlike TestCheck_DegradedPackageForcesAllItsTests, no Coverage entry
+	// exists anywhere under "broken/" — this package has never
+	// successfully compiled for coverage, so degradedPackageTests has
+	// nothing to force-include for it.
+	changedRanges := map[string][]gitutil.LineRange{
+		"broken/new.go": {{Start: 1, End: 1}},
+	}
+	result := Check("pr", m, false, []string{"broken/new.go"}, changedRanges, nil, nil)
+	if result.ManifestStatus != "partial-fallback" {
+		t.Fatalf("expected partial-fallback, got %s", result.ManifestStatus)
+	}
+	if len(result.SelectedTests) != 2 {
+		t.Fatalf("expected the full suite (2 tests), got: %+v", result.SelectedTests)
+	}
+	for _, s := range result.SelectedTests {
+		if s.Reason != "unmapped-code-fallback" {
+			t.Fatalf("expected reason unmapped-code-fallback, got: %+v", s)
+		}
+	}
+}
+
 func TestCheck_ResultCarriesDegradedPackages(t *testing.T) {
 	m := testManifest()
 	m.DegradedPackages = []string{"broken"}

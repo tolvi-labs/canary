@@ -81,15 +81,20 @@ func Check(
 		}
 		// A file under a known degraded package isn't silently skipped —
 		// degradedPackageTests below already force-includes everything
-		// known about that package. Only a file the manifest has never
-		// heard of at all (not covered, not in a degraded package)
-		// triggers the full-suite fallback.
+		// known about that package, but only if it actually has coverage
+		// history to pull from. A package that has never successfully
+		// compiled for coverage (e.g. a compile error from day one) has
+		// nothing in m.Coverage, so AllTestsUnderPackage would return
+		// nothing for it either. Only a degraded package with real
+		// coverage history is excluded here; a degraded package with zero
+		// history falls through to the same full-suite fallback as a file
+		// the manifest has never heard of at all.
 		dir := ""
 		if idx := strings.LastIndex(file, "/"); idx >= 0 {
 			dir = file[:idx]
 		}
-		if degradedDirs[dir] {
-			continue
+		if degradedDirs[dir] && len(manifest.AllTestsUnderPackage(m, dir)) > 0 {
+			continue // a degraded package with known coverage history is handled by degradedPackageTests below
 		}
 		result.ManifestStatus = "partial-fallback"
 		result.SelectedTests = fullSuite(m, "unmapped-code-fallback")
