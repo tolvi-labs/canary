@@ -7,7 +7,7 @@ import (
 )
 
 const shim = "#!/usr/bin/env sh\n" +
-	"# canary pre-commit hook — installed by `canary hook install`.\n" +
+	"# canary post-commit hook — installed by `canary hook install`.\n" +
 	"# Incrementally refreshes the global coverage manifest after each commit.\n" +
 	"command -v canary >/dev/null 2>&1 || exit 0\n" +
 	"canary refresh\n"
@@ -25,14 +25,14 @@ func Run(args []string) int {
 			fmt.Fprintf(os.Stderr, "canary hook install: %v\n", err)
 			return 1
 		}
-		fmt.Println("✓ Installed pre-commit hook")
+		fmt.Println("✓ Installed post-commit hook")
 		return 0
 	case "uninstall":
 		if err := uninstall("."); err != nil {
 			fmt.Fprintf(os.Stderr, "canary hook uninstall: %v\n", err)
 			return 1
 		}
-		fmt.Println("✓ Removed pre-commit hook")
+		fmt.Println("✓ Removed post-commit hook")
 		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "canary hook: unknown subcommand %q\n", args[0])
@@ -41,10 +41,10 @@ func Run(args []string) int {
 }
 
 func hookPath(repoDir string) string {
-	return filepath.Join(repoDir, ".git", "hooks", "pre-commit")
+	return filepath.Join(repoDir, ".git", "hooks", "post-commit")
 }
 
-// install writes the pre-commit shim to repoDir's .git/hooks/pre-commit.
+// install writes the post-commit shim to repoDir's .git/hooks/post-commit.
 // It refuses to overwrite an existing hook unless force is true.
 func install(repoDir string, force bool) error {
 	path := hookPath(repoDir)
@@ -60,7 +60,7 @@ func install(repoDir string, force bool) error {
 	return nil
 }
 
-// uninstall removes the pre-commit shim if it was installed by this tool.
+// uninstall removes the post-commit shim if it was installed by this tool.
 func uninstall(repoDir string) error {
 	path := hookPath(repoDir)
 	content, err := os.ReadFile(path)

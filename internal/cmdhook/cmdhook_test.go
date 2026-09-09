@@ -15,7 +15,7 @@ func TestInstallAndUninstall(t *testing.T) {
 	if err := install(dir, false); err != nil {
 		t.Fatalf("install failed: %v", err)
 	}
-	path := filepath.Join(dir, ".git", "hooks", "pre-commit")
+	path := filepath.Join(dir, ".git", "hooks", "post-commit")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("expected hook file to exist: %v", err)
@@ -41,7 +41,7 @@ func TestUninstall_LeavesForeignHookInPlace(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, ".git", "hooks", "pre-commit")
+	path := filepath.Join(dir, ".git", "hooks", "post-commit")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\necho not canary\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
