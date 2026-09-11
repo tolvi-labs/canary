@@ -3,6 +3,7 @@ package node
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -99,7 +100,12 @@ func (Backend) UnitTests(repoDir, modulePath, unit, workDir string) (map[string]
 		cmd := exec.Command("node", "--test",
 			"--experimental-test-coverage",
 			"--test-reporter=lcov", "--test-reporter-destination="+lcovPath,
-			"--test-name-pattern="+regexEscapeExact(name),
+			// Anchored with ^...$: --test-name-pattern's regex otherwise
+			// does an unanchored substring match, so an unanchored
+			// "sends" would also match a distinct test named "sends
+			// twice" and run both together, merging their coverage into
+			// this one result entry.
+			"--test-name-pattern=^"+regexEscapeExact(name)+"$",
 			unit)
 		cmd.Dir = repoDir
 		var stderr bytes.Buffer
@@ -150,7 +156,22 @@ func (b Backend) TouchedUnits(repoDir string, changedFiles []string) []string {
 func listTestNames(repoDir, unit string) ([]string, error) {
 	cmd := exec.Command("node", "--test", "--test-reporter=tap", unit)
 	cmd.Dir = repoDir
-	out, _ := cmd.Output() // a failing test still lists correctly; exit status is irrelevant here
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			// The command never ran at all (e.g. node missing from PATH)
+			// — Node coverage is non-functional for the whole repo, not
+			// just "this file has zero tests." Surface it rather than
+			// letting UnitTests's len(names)==0 path report a clean,
+			// silent empty result indistinguishable from a legitimately
+			// empty test file.
+			return nil, fmt.Errorf("node --test --test-reporter=tap %s: %w", unit, err)
+		}
+		// A non-zero exit just means a test failed (node:test exits
+		// non-zero on failure); TAP output was still produced on stdout
+		// and still lists correctly. Fall through and parse it.
+	}
 	var names []string
 	scanner := bufio.NewScanner(bytes.NewReader(out))
 	for scanner.Scan() {
@@ -210,10 +231,13 @@ func sanitize(s string) string {
 	return strings.NewReplacer("/", "_", ".", "_", " ", "_").Replace(s)
 }
 
-// regexEscapeExact escapes name for use as an exact --test-name-pattern
-// match (the flag takes a regex; test names themselves are plain text
-// here, but escaping keeps this correct if a fixture or real test name
-// ever contains a regex metacharacter).
+// regexEscapeExact escapes name's regex metacharacters so it can be
+// embedded in a --test-name-pattern value (the flag takes a regex; test
+// names themselves are plain text here, but escaping keeps this correct
+// if a fixture or real test name ever contains a regex metacharacter).
+// It does not anchor the result — the caller must wrap it in ^...$ to
+// get an exact match, since --test-name-pattern otherwise does an
+// unanchored substring match.
 func regexEscapeExact(name string) string {
 	var b strings.Builder
 	for _, r := range name {

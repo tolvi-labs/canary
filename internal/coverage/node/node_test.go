@@ -4,12 +4,23 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tolvi-labs/canary/internal/coverage"
 )
 
 func copyFixture(t *testing.T) string {
 	t.Helper()
+	return copyFixtureDir(t, "testdata/fixture")
+}
+
+// copyFixtureDir copies src (a testdata fixture directory) into a fresh
+// t.TempDir(). Generalized out of copyFixture so a second, independent
+// fixture (testdata/fixture-namecollision) can be copied without adding
+// files to testdata/fixture and perturbing the other tests' assumptions
+// about what ListUnits finds there.
+func copyFixtureDir(t *testing.T, src string) string {
+	t.Helper()
 	dst := t.TempDir()
-	src := "testdata/fixture"
 	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -29,7 +40,7 @@ func copyFixture(t *testing.T) string {
 		return os.WriteFile(target, data, 0644)
 	})
 	if err != nil {
-		t.Fatalf("copying fixture: %v", err)
+		t.Fatalf("copying fixture %s: %v", src, err)
 	}
 	return dst
 }
@@ -120,4 +131,57 @@ func TestUnitTests_DoesNotLeakUnrelatedFiles(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestUnitTests_ExactNameMatch guards against --test-name-pattern doing
+// an unanchored substring match. testdata/fixture-namecollision has two
+// tests, "sends" and "sends twice" — "sends" is a substring of "sends
+// twice" — each exercising a distinct, otherwise-never-called function
+// in substr.js. An unanchored pattern for "sends" would also match
+// "sends twice" (node:test runs both together as one process), merging
+// sendsTwice's coverage into the "sends" result; the fix anchors the
+// pattern with ^...$ so each name's run is isolated to just that test.
+func TestUnitTests_ExactNameMatch(t *testing.T) {
+	repoDir := copyFixtureDir(t, "testdata/fixture-namecollision")
+	workDir := t.TempDir()
+
+	result, err := (Backend{}).UnitTests(repoDir, "fixture-namecollision", "substr.test.js", workDir)
+	if err != nil {
+		t.Fatalf("UnitTests failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 tests, got %d: %v", len(result), result)
+	}
+
+	sends, ok := result["sends"]
+	if !ok {
+		t.Fatalf("expected \"sends\" in results, got: %v", result)
+	}
+	sendsTwice, ok := result["sends twice"]
+	if !ok {
+		t.Fatalf("expected \"sends twice\" in results, got: %v", result)
+	}
+
+	if !lineCovered(sends, "substr.js", 1) {
+		t.Fatalf("expected \"sends\" to cover line 1 (sendsOnce), got: %+v", sends)
+	}
+	if lineCovered(sends, "substr.js", 2) {
+		t.Fatalf("expected \"sends\" to NOT cover line 2 (sendsTwice) — substring-match leak, got: %+v", sends)
+	}
+
+	if !lineCovered(sendsTwice, "substr.js", 2) {
+		t.Fatalf("expected \"sends twice\" to cover line 2 (sendsTwice), got: %+v", sendsTwice)
+	}
+	if lineCovered(sendsTwice, "substr.js", 1) {
+		t.Fatalf("expected \"sends twice\" to NOT cover line 1 (sendsOnce) — substring-match leak, got: %+v", sendsTwice)
+	}
+}
+
+func lineCovered(blocks []coverage.Block, file string, line int) bool {
+	for _, b := range blocks {
+		if b.File == file && b.StartLine == line && b.Count > 0 {
+			return true
+		}
+	}
+	return false
 }
