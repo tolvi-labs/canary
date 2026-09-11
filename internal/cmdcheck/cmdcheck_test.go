@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/tolvi-labs/canary/internal/coverage/golang"
 	"github.com/tolvi-labs/canary/internal/manifest"
 )
 
@@ -59,7 +60,7 @@ func setupRepo(t *testing.T) string {
 func TestRun_SelectsCoverageDerivedTests(t *testing.T) {
 	dir := setupRepo(t)
 
-	m, err := manifest.Build(dir)
+	m, err := manifest.Build(dir, golang.Backend{})
 	if err != nil {
 		t.Fatalf("manifest.Build failed: %v", err)
 	}

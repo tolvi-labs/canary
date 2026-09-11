@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/tolvi-labs/canary/internal/coverage"
-	"github.com/tolvi-labs/canary/internal/coverage/golang"
 	"github.com/tolvi-labs/canary/internal/gitutil"
 )
 
@@ -37,8 +36,7 @@ type GlobalManifest struct {
 
 // Build runs the full per-test coverage instrumentation across every
 // package in repoDir and produces a fresh GlobalManifest.
-func Build(repoDir string) (GlobalManifest, error) {
-	backend := golang.Backend{}
+func Build(repoDir string, backend coverage.Backend) (GlobalManifest, error) {
 	modulePath, err := backend.ModulePath(repoDir)
 	if err != nil {
 		return GlobalManifest{}, err
@@ -58,8 +56,7 @@ func Build(repoDir string) (GlobalManifest, error) {
 // not pruned from the registry in v1 — a full `canary init` rebuild
 // clears that staleness; this is a deliberate v1 simplification, not an
 // oversight.
-func Refresh(existing GlobalManifest, repoDir string, touchedPackages []string) (GlobalManifest, error) {
-	backend := golang.Backend{}
+func Refresh(existing GlobalManifest, repoDir string, touchedPackages []string, backend coverage.Backend) (GlobalManifest, error) {
 	modulePath, err := backend.ModulePath(repoDir)
 	if err != nil {
 		return GlobalManifest{}, err
