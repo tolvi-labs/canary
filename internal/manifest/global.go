@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/tolvi-labs/canary/internal/coverage"
+	"github.com/tolvi-labs/canary/internal/coverage/golang"
 	"github.com/tolvi-labs/canary/internal/gitutil"
 )
 
@@ -37,17 +38,18 @@ type GlobalManifest struct {
 // Build runs the full per-test coverage instrumentation across every
 // package in repoDir and produces a fresh GlobalManifest.
 func Build(repoDir string) (GlobalManifest, error) {
-	modulePath, err := coverage.ModulePath(repoDir)
+	backend := golang.Backend{}
+	modulePath, err := backend.ModulePath(repoDir)
 	if err != nil {
 		return GlobalManifest{}, err
 	}
-	packages, err := coverage.ListPackages(repoDir)
+	packages, err := backend.ListUnits(repoDir)
 	if err != nil {
 		return GlobalManifest{}, err
 	}
 	return buildFromPackages(repoDir, modulePath, packages, GlobalManifest{
 		Coverage: map[string][]CoveredRange{},
-	})
+	}, backend)
 }
 
 // Refresh re-runs coverage instrumentation only for touchedPackages and
@@ -57,7 +59,8 @@ func Build(repoDir string) (GlobalManifest, error) {
 // clears that staleness; this is a deliberate v1 simplification, not an
 // oversight.
 func Refresh(existing GlobalManifest, repoDir string, touchedPackages []string) (GlobalManifest, error) {
-	modulePath, err := coverage.ModulePath(repoDir)
+	backend := golang.Backend{}
+	modulePath, err := backend.ModulePath(repoDir)
 	if err != nil {
 		return GlobalManifest{}, err
 	}
@@ -73,17 +76,17 @@ func Refresh(existing GlobalManifest, repoDir string, touchedPackages []string) 
 		Packages:         unionSorted(existing.Packages, touchedPackages),
 		DegradedPackages: existing.DegradedPackages, // buildFromPackages carries this forward for anything not re-evaluated this round
 	}
-	return buildFromPackages(repoDir, modulePath, touchedPackages, merged)
+	return buildFromPackages(repoDir, modulePath, touchedPackages, merged, backend)
 }
 
-// buildFromPackages runs coverage.PackageTests for each of packages and
+// buildFromPackages runs coverage.UnitTests for each of packages and
 // folds the result into base, then finalizes (sorts, sets BuiltAtSHA). A
 // package that fails to compile for coverage does not abort the whole
 // build — it is recorded in DegradedPackages/BuildWarnings and its prior
 // coverage entries (if any) are left untouched, so gate.Check can force-
 // include everything known about it rather than trust a selection that
 // might no longer align with the code (see Task 11).
-func buildFromPackages(repoDir, modulePath string, packages []string, base GlobalManifest) (GlobalManifest, error) {
+func buildFromPackages(repoDir, modulePath string, packages []string, base GlobalManifest, backend coverage.Backend) (GlobalManifest, error) {
 	workDir, err := os.MkdirTemp("", "canary-coverage-*")
 	if err != nil {
 		return GlobalManifest{}, err
@@ -122,7 +125,7 @@ func buildFromPackages(repoDir, modulePath string, packages []string, base Globa
 
 	var warnings []string
 	for _, pkg := range sortedPackages {
-		testBlocks, err := coverage.PackageTests(repoDir, modulePath, pkg, workDir)
+		testBlocks, err := backend.UnitTests(repoDir, modulePath, pkg, workDir)
 		if err != nil {
 			degraded[packageDir(pkg)] = true
 			warnings = append(warnings, fmt.Sprintf("%s: %v", pkg, err))

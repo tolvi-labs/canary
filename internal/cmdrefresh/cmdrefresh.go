@@ -4,8 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/tolvi-labs/canary/internal/gitutil"
@@ -67,33 +65,4 @@ func Run(args []string) int {
 		}
 	}
 	return 0
-}
-
-// touchedPackagesFor maps changed .go files to their owning package
-// directories, in the "./dir" form coverage.ListPackages itself uses. A
-// directory that's no longer a buildable package (e.g. it was deleted)
-// is silently skipped — nothing to refresh there.
-func touchedPackagesFor(repoDir string, changedFiles []string) []string {
-	dirs := map[string]bool{}
-	for _, f := range changedFiles {
-		if !strings.HasSuffix(f, ".go") {
-			continue
-		}
-		dir := filepath.Dir(f)
-		if dir == "." {
-			dirs["."] = true
-		} else {
-			dirs["./"+dir] = true
-		}
-	}
-	var out []string
-	for d := range dirs {
-		cmd := exec.Command("go", "list", d)
-		cmd.Dir = repoDir
-		if err := cmd.Run(); err != nil {
-			continue
-		}
-		out = append(out, d)
-	}
-	return out
 }
