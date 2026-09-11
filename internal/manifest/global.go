@@ -30,8 +30,20 @@ type GlobalManifest struct {
 	Packages         []string
 	Tests            []string
 	Coverage         map[string][]CoveredRange // key: repo-relative file path
-	DegradedPackages []string                  // repo-relative package dirs that failed to compile for coverage on the last build/refresh attempt
-	BuildWarnings    []string                  // human-readable detail per degraded package, for canary init/refresh output
+	DegradedPackages []string                  // repo-relative unit scopes (a package dir for Go, a test-file path for Python/Node) that failed to build for coverage on the last build/refresh attempt
+	BuildWarnings    []string                  // human-readable detail per degraded unit, for canary init/refresh output
+	// TestsByUnit records, per unit (the backend's own unit string, as
+	// handed to coverage.Backend.UnitTests), the test names that unit's
+	// last successful coverage build produced. Refresh needs it to retire
+	// a unit's stale test names: for a package-shaped unit (Go) the
+	// coverage entries to invalidate can be identified by directory
+	// prefix, but for a file-shaped unit (Python, Node) a test file's
+	// coverage lands on arbitrary source files that other units also
+	// cover, so the only sound way to invalidate "what this unit
+	// previously claimed" is by test name. Absent (a manifest built
+	// before this field existed), a refresh falls back to the older
+	// prefix-only invalidation and a full `canary init` repopulates it.
+	TestsByUnit map[string][]string
 }
 
 // Build runs the full per-test coverage instrumentation across every
@@ -52,10 +64,14 @@ func Build(repoDir string, backend coverage.Backend) (GlobalManifest, error) {
 
 // Refresh re-runs coverage instrumentation only for touchedPackages and
 // merges the result into existing, replacing any prior coverage data for
-// files under those packages. A test that no longer exists anywhere is
-// not pruned from the registry in v1 — a full `canary init` rebuild
-// clears that staleness; this is a deliberate v1 simplification, not an
-// oversight.
+// those units — both the entries under each unit's own scope and every
+// coverage attribution to a test name that unit used to produce and no
+// longer does (see TestsByUnit). A test name that survives nowhere after
+// that is dropped from the registry, so a renamed or deleted test can't
+// linger and be handed to a CI runner that no longer has it. A unit that
+// is never touched again is still not revisited — a full `canary init`
+// rebuild remains the way to clear staleness for a unit that disappeared
+// from the repo entirely.
 func Refresh(existing GlobalManifest, repoDir string, touchedPackages []string, backend coverage.Backend) (GlobalManifest, error) {
 	modulePath, err := backend.ModulePath(repoDir)
 	if err != nil {
@@ -72,6 +88,7 @@ func Refresh(existing GlobalManifest, repoDir string, touchedPackages []string, 
 		Tests:            append([]string{}, existing.Tests...),
 		Packages:         unionSorted(existing.Packages, touchedPackages),
 		DegradedPackages: existing.DegradedPackages, // buildFromPackages carries this forward for anything not re-evaluated this round
+		TestsByUnit:      existing.TestsByUnit,      // ditto: a unit not rebuilt this round keeps whatever test names it last produced
 	}
 	return buildFromPackages(repoDir, modulePath, touchedPackages, merged, backend)
 }
@@ -120,6 +137,24 @@ func buildFromPackages(repoDir, modulePath string, packages []string, base Globa
 		}
 	}
 
+	// testsByUnit carries every unit's previously-recorded test names
+	// forward; owners inverts it so a name can be retired the moment no
+	// unit still produces it. A unit that fails to rebuild keeps both, so
+	// its tests are never retired on the strength of a build that didn't
+	// happen.
+	testsByUnit := map[string][]string{}
+	owners := map[string]map[string]bool{}
+	for unit, names := range base.TestsByUnit {
+		testsByUnit[unit] = append([]string{}, names...)
+		for _, n := range names {
+			if owners[n] == nil {
+				owners[n] = map[string]bool{}
+			}
+			owners[n][unit] = true
+		}
+	}
+	retired := map[string]bool{}
+
 	var warnings []string
 	for _, pkg := range sortedPackages {
 		testBlocks, err := backend.UnitTests(repoDir, modulePath, pkg, workDir)
@@ -132,12 +167,33 @@ func buildFromPackages(repoDir, modulePath string, packages []string, base Globa
 		// before merging in the fresh ones.
 		prefix := packageDir(pkg)
 		for k := range seen {
-			if underAny(k.file, []string{prefix}) {
+			if FileInScope(k.file, prefix) {
 				delete(seen, k)
 			}
 		}
+		// ...and release this unit's claim on the test names it used to
+		// produce. Anything it no longer produces, and no other unit
+		// does either, is retired below: for a file-shaped unit the
+		// prefix sweep above only reaches the test file's own entries,
+		// so a renamed test's attributions on the source files it
+		// covered would otherwise accumulate forever.
+		for _, old := range testsByUnit[pkg] {
+			if owners[old] == nil {
+				continue
+			}
+			delete(owners[old], pkg)
+			if len(owners[old]) == 0 {
+				retired[old] = true
+			}
+		}
+		fresh := make([]string, 0, len(testBlocks))
 		for testName, blocks := range testBlocks {
+			fresh = append(fresh, testName)
 			testSet[testName] = true
+			if owners[testName] == nil {
+				owners[testName] = map[string]bool{}
+			}
+			owners[testName][pkg] = true
 			for _, b := range blocks {
 				k := rangeKey{b.File, b.StartLine, b.EndLine}
 				if b.Count > 0 {
@@ -146,6 +202,30 @@ func buildFromPackages(repoDir, modulePath string, packages []string, base Globa
 					seen[k] = []string{}
 				}
 			}
+		}
+		sort.Strings(fresh)
+		testsByUnit[pkg] = fresh
+	}
+
+	// A name is only really retired if nothing re-claimed it later in the
+	// loop (two units can legitimately share a test name).
+	for name := range retired {
+		if len(owners[name]) > 0 {
+			delete(retired, name)
+			continue
+		}
+		delete(testSet, name)
+		delete(owners, name)
+	}
+	if len(retired) > 0 {
+		for k, tests := range seen {
+			kept := make([]string, 0, len(tests))
+			for _, t := range tests {
+				if !retired[t] {
+					kept = append(kept, t)
+				}
+			}
+			seen[k] = kept
 		}
 	}
 
@@ -188,6 +268,7 @@ func buildFromPackages(repoDir, modulePath string, packages []string, base Globa
 		Coverage:         coverageByFile,
 		DegradedPackages: degradedList,
 		BuildWarnings:    warnings,
+		TestsByUnit:      testsByUnit,
 	}, nil
 }
 
@@ -220,9 +301,11 @@ func unionSorted(a, b []string) []string {
 	return out
 }
 
-// packageDir strips the leading "./" from a package pattern like
-// "./internal/gate" (the form coverage.ListPackages returns), or returns
-// "" for the module root (".").
+// packageDir turns a backend's unit string into the repo-relative scope
+// it owns: a Go package pattern like "./internal/gate" becomes the
+// directory "internal/gate" (and "." becomes "", the module root), while
+// a file-shaped unit from the Python or Node backend ("lib/test_x.py",
+// "lib.test.js") is already its own scope and passes through unchanged.
 func packageDir(pkg string) string {
 	if pkg == "." {
 		return ""
@@ -230,20 +313,19 @@ func packageDir(pkg string) string {
 	return strings.TrimPrefix(pkg, "./")
 }
 
-// underAny reports whether file falls under any of the given
-// repo-relative package directories (an empty prefix means the module
-// root: a file with no "/" in its path).
-func underAny(file string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if p == "" {
-			if !strings.Contains(file, "/") {
-				return true
-			}
-			continue
-		}
-		if file == p || strings.HasPrefix(file, p+"/") {
-			return true
-		}
+// FileInScope reports whether a repo-relative file path falls within a
+// unit scope, as produced by packageDir. The same predicate covers both
+// unit shapes: a package-shaped scope is a directory, so every file
+// under it matches; a file-shaped scope matches only itself. An empty
+// scope is the module root — a file with no "/" in its path.
+//
+// The gate needs this rather than "derive the file's parent directory
+// and look it up": a parent directory can never equal a file-shaped
+// scope, so a directory-keyed lookup silently never matches a degraded
+// Python or Node unit.
+func FileInScope(file, scope string) bool {
+	if scope == "" {
+		return !strings.Contains(file, "/")
 	}
-	return false
+	return file == scope || strings.HasPrefix(file, scope+"/")
 }

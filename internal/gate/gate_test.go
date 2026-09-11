@@ -24,7 +24,7 @@ func TestCheck_PRGate_SelectsByCoverage(t *testing.T) {
 	changedRanges := map[string][]gitutil.LineRange{
 		"mathutil/mathutil.go": {{Start: 3, End: 3}},
 	}
-	result := Check("pr", m, false, []string{"mathutil/mathutil.go"}, changedRanges, nil, nil)
+	result := Check("pr", m, false, []string{"mathutil/mathutil.go"}, changedRanges, nil, nil, []string{".go"})
 	if result.ManifestStatus != "fresh" {
 		t.Fatalf("expected fresh, got %s", result.ManifestStatus)
 	}
@@ -35,7 +35,7 @@ func TestCheck_PRGate_SelectsByCoverage(t *testing.T) {
 
 func TestCheck_PRGate_StaleManifestFallsBackToFullSuite(t *testing.T) {
 	m := testManifest()
-	result := Check("pr", m, true, nil, nil, nil, nil)
+	result := Check("pr", m, true, nil, nil, nil, nil, []string{".go"})
 	if result.ManifestStatus != "stale-fallback" {
 		t.Fatalf("expected stale-fallback, got %s", result.ManifestStatus)
 	}
@@ -49,7 +49,7 @@ func TestCheck_MergeGate_IgnoresDiffSelectsFullSuite(t *testing.T) {
 	changedRanges := map[string][]gitutil.LineRange{
 		"mathutil/mathutil.go": {{Start: 3, End: 3}},
 	}
-	result := Check("merge", m, false, []string{"mathutil/mathutil.go"}, changedRanges, nil, nil)
+	result := Check("merge", m, false, []string{"mathutil/mathutil.go"}, changedRanges, nil, nil, []string{".go"})
 	if len(result.SelectedTests) != 2 {
 		t.Fatalf("expected the full suite (2 tests) for a merge gate, got: %+v", result.SelectedTests)
 	}
@@ -74,7 +74,7 @@ func TestCheck_PRGate_BindingForcesUnrelatedTest(t *testing.T) {
 	changedRanges := map[string][]gitutil.LineRange{
 		"mathutil/mathutil.go": {{Start: 3, End: 3}},
 	}
-	result := Check("pr", m, false, []string{"mathutil/mathutil.go"}, changedRanges, decisions, nil)
+	result := Check("pr", m, false, []string{"mathutil/mathutil.go"}, changedRanges, decisions, nil, []string{".go"})
 	var foundForced bool
 	for _, s := range result.SelectedTests {
 		if s.Test == "TestHello" && s.Reason == "never-skip-binding" && s.BindingDecision == "dec-1" {
@@ -91,7 +91,7 @@ func TestCheck_PRGate_UnmappedNewFileFallsBackToFullSuite(t *testing.T) {
 	changedRanges := map[string][]gitutil.LineRange{
 		"newpkg/newfile.go": {{Start: 1, End: 3}},
 	}
-	result := Check("pr", m, false, []string{"newpkg/newfile.go"}, changedRanges, nil, nil)
+	result := Check("pr", m, false, []string{"newpkg/newfile.go"}, changedRanges, nil, nil, []string{".go"})
 	if result.ManifestStatus != "partial-fallback" {
 		t.Fatalf("expected partial-fallback, got %s", result.ManifestStatus)
 	}
@@ -117,7 +117,7 @@ func TestCheck_DegradedPackageForcesAllItsTests(t *testing.T) {
 	changedRanges := map[string][]gitutil.LineRange{
 		"broken/other.go": {{Start: 1, End: 1}},
 	}
-	result := Check("pr", m, false, []string{"broken/other.go"}, changedRanges, nil, nil)
+	result := Check("pr", m, false, []string{"broken/other.go"}, changedRanges, nil, nil, []string{".go"})
 	var found bool
 	for _, s := range result.SelectedTests {
 		if s.Test == "TestOldBroken" && s.Reason == "degraded-package-fallback" {
@@ -139,7 +139,7 @@ func TestCheck_DegradedPackageWithNoCoverageHistoryFallsBackToFullSuite(t *testi
 	changedRanges := map[string][]gitutil.LineRange{
 		"broken/new.go": {{Start: 1, End: 1}},
 	}
-	result := Check("pr", m, false, []string{"broken/new.go"}, changedRanges, nil, nil)
+	result := Check("pr", m, false, []string{"broken/new.go"}, changedRanges, nil, nil, []string{".go"})
 	if result.ManifestStatus != "partial-fallback" {
 		t.Fatalf("expected partial-fallback, got %s", result.ManifestStatus)
 	}
@@ -153,10 +153,112 @@ func TestCheck_DegradedPackageWithNoCoverageHistoryFallsBackToFullSuite(t *testi
 	}
 }
 
+// nodeManifest is a manifest as the Node backend produces one: units are
+// test *files*, and node:test excludes the test file itself from its
+// coverage report, so the only covered paths are plain source files.
+func nodeManifest() manifest.GlobalManifest {
+	return manifest.GlobalManifest{
+		Tests: []string{"add works", "sub works"},
+		Coverage: map[string][]manifest.CoveredRange{
+			"lib.js": {
+				{StartLine: 1, EndLine: 1, Tests: []string{"add works"}},
+				{StartLine: 2, EndLine: 2, Tests: []string{"sub works"}},
+			},
+		},
+		TestsByUnit: map[string][]string{"lib.test.js": {"add works", "sub works"}},
+	}
+}
+
+// TestCheck_PRGate_UnmappedNonGoFileFallsBackToFullSuite is the
+// regression test for the gate's safety net having been hardcoded to
+// ".go": a brand-new, untested .js file in a Node repo has no coverage
+// data at all, so it must force the full-suite fallback exactly the way
+// a new .go file does in a Go repo. Before the fix this file was skipped
+// by the extension guard entirely and the gate reported "fresh" with
+// zero tests selected — a green gate over completely unmapped code.
+func TestCheck_PRGate_UnmappedNonGoFileFallsBackToFullSuite(t *testing.T) {
+	m := nodeManifest()
+	changedRanges := map[string][]gitutil.LineRange{
+		"brandnew.js": {{Start: 1, End: 3}},
+	}
+	result := Check("pr", m, false, []string{"brandnew.js"}, changedRanges, nil, nil, []string{".js", ".mjs", ".cjs"})
+	if result.ManifestStatus != "partial-fallback" {
+		t.Fatalf("expected partial-fallback for an unmapped .js file, got %s (selected: %+v)", result.ManifestStatus, result.SelectedTests)
+	}
+	if len(result.SelectedTests) != 2 {
+		t.Fatalf("expected the full suite (2 tests), got: %+v", result.SelectedTests)
+	}
+	for _, s := range result.SelectedTests {
+		if s.Reason != "unmapped-code-fallback" {
+			t.Fatalf("expected reason unmapped-code-fallback, got: %+v", s)
+		}
+	}
+}
+
+// TestCheck_PRGate_ExtensionsScopeTheSafetyNet is the other half: a
+// changed file the repo's backend produces no coverage for at all (a
+// .md, or a .go file in a Node repo) must not trip the fallback, or
+// every documentation-only PR would run the whole suite.
+func TestCheck_PRGate_ExtensionsScopeTheSafetyNet(t *testing.T) {
+	m := nodeManifest()
+	changedRanges := map[string][]gitutil.LineRange{
+		"README.md":          {{Start: 1, End: 3}},
+		"lib.js":             {{Start: 1, End: 1}},
+		"tools/helper.go":    {{Start: 1, End: 1}},
+		"docs/guide.mdx.txt": {{Start: 1, End: 1}},
+	}
+	result := Check("pr", m, false, []string{"README.md", "lib.js", "tools/helper.go"}, changedRanges, nil, nil, []string{".js", ".mjs", ".cjs"})
+	if result.ManifestStatus != "fresh" {
+		t.Fatalf("expected fresh, got %s", result.ManifestStatus)
+	}
+	if len(result.SelectedTests) != 1 || result.SelectedTests[0].Test != "add works" {
+		t.Fatalf("expected just the coverage-derived test, got: %+v", result.SelectedTests)
+	}
+}
+
+// TestCheck_DegradedFileShapedUnitForcesAllItsTests is the regression
+// test for the degraded-unit fallback having been unreachable for
+// Python/Node. Their degraded entries are test-file *paths*, and the
+// gate used to derive a changed file's parent directory and look that
+// up — a directory never equals a file path, so the conservative
+// force-include could never fire. Here the degraded unit is a Python
+// test file that still has coverage history; touching it must
+// force-include everything that file is known to cover.
+func TestCheck_DegradedFileShapedUnitForcesAllItsTests(t *testing.T) {
+	m := manifest.GlobalManifest{
+		Tests: []string{"test_add", "test_legacy"},
+		Coverage: map[string][]manifest.CoveredRange{
+			"mathutil/__init__.py":         {{StartLine: 2, EndLine: 2, Tests: []string{"test_add"}}},
+			"mathutil/test_mathutil.py":    {{StartLine: 4, EndLine: 4, Tests: []string{"test_add"}}},
+			"mathutil/test_legacy.py":      {{StartLine: 4, EndLine: 4, Tests: []string{"test_legacy"}}},
+			"mathutil/legacy_internals.py": {{StartLine: 2, EndLine: 2, Tests: []string{"test_legacy"}}},
+		},
+		DegradedPackages: []string{"mathutil/test_legacy.py"},
+	}
+	changedRanges := map[string][]gitutil.LineRange{
+		// A line of the degraded test file the manifest has no range for,
+		// so coverage-based selection alone would pick nothing here.
+		"mathutil/test_legacy.py": {{Start: 9, End: 9}},
+	}
+	result := Check("pr", m, false, []string{"mathutil/test_legacy.py"}, changedRanges, nil, nil, []string{".py"})
+	if result.ManifestStatus != "fresh" {
+		t.Fatalf("expected the degraded unit's own history to cover this, got %s", result.ManifestStatus)
+	}
+	var found bool
+	for _, s := range result.SelectedTests {
+		if s.Test == "test_legacy" && s.Reason == "degraded-package-fallback" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected test_legacy forced by the degraded file-shaped unit, got: %+v", result.SelectedTests)
+	}
+}
+
 func TestCheck_ResultCarriesDegradedPackages(t *testing.T) {
 	m := testManifest()
 	m.DegradedPackages = []string{"broken"}
-	result := Check("pr", m, false, nil, nil, nil, nil)
+	result := Check("pr", m, false, nil, nil, nil, nil, []string{".go"})
 	if len(result.DegradedPackages) != 1 || result.DegradedPackages[0] != "broken" {
 		t.Fatalf("expected DegradedPackages to carry through from the manifest, got: %+v", result.DegradedPackages)
 	}
@@ -172,7 +274,7 @@ func TestCheck_ImpactIncludesProvenanceRisk(t *testing.T) {
 			{Path: "mathutil/mathutil.go", ImplicatedDecisions: []string{"prov-dec-1"}},
 		},
 	}
-	result := Check("pr", m, false, []string{"mathutil/mathutil.go"}, changedRanges, nil, provReport)
+	result := Check("pr", m, false, []string{"mathutil/mathutil.go"}, changedRanges, nil, provReport, []string{".go"})
 	if len(result.Impact) != 1 || result.Impact[0].Path != "mathutil/mathutil.go" {
 		t.Fatalf("unexpected impact: %+v", result.Impact)
 	}

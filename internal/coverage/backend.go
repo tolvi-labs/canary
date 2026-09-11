@@ -21,8 +21,21 @@ type Backend interface {
 	// used only for trimming absolute paths to repo-relative ones.
 	ModulePath(repoDir string) (string, error)
 
+	// SourceExtensions returns the file extensions (including the leading
+	// dot) whose contents this backend's coverage data is expected to
+	// account for. The gate uses it to decide which changed files its
+	// unmapped-code safety net applies to: a changed file with one of
+	// these extensions that the manifest has no coverage for must force
+	// the full-suite fallback rather than silently select nothing. A
+	// backend that returns an empty list makes that net apply to every
+	// changed file — the conservative direction, never the silent one.
+	SourceExtensions() []string
+
 	// ListUnits returns every testable unit under repoDir, in whatever
-	// form UnitTests expects as its unit argument.
+	// form UnitTests expects as its unit argument. A unit that exists but
+	// cannot be collected/compiled must still be returned, so that
+	// UnitTests can fail on it and the manifest can record it as degraded
+	// — dropping it here would silently erase it from coverage entirely.
 	ListUnits(repoDir string) ([]string, error)
 
 	// UnitTests returns, for one unit, a map of test name to the source

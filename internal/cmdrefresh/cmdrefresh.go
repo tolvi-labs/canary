@@ -6,10 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tolvi-labs/canary/internal/coverage"
-	"github.com/tolvi-labs/canary/internal/coverage/golang"
-	"github.com/tolvi-labs/canary/internal/coverage/node"
-	"github.com/tolvi-labs/canary/internal/coverage/python"
 	"github.com/tolvi-labs/canary/internal/gitutil"
 	"github.com/tolvi-labs/canary/internal/langconfig"
 	"github.com/tolvi-labs/canary/internal/manifest"
@@ -25,12 +21,7 @@ func Run(args []string) int {
 		return 2
 	}
 
-	cfg, err := langconfig.Load(*repoDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "canary refresh: %v\n", err)
-		return 2
-	}
-	backend, err := selectBackend(cfg.Language)
+	_, backend, err := langconfig.Resolve(*repoDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "canary refresh: %v\n", err)
 		return 2
@@ -81,20 +72,4 @@ func Run(args []string) int {
 		}
 	}
 	return 0
-}
-
-// selectBackend maps a canary.yml language string to its coverage.Backend.
-// Duplicated from cmdinit deliberately — two ~10-line switch statements
-// don't justify a shared package yet.
-func selectBackend(lang string) (coverage.Backend, error) {
-	switch lang {
-	case "go":
-		return golang.Backend{}, nil
-	case "python":
-		return python.Backend{}, nil
-	case "node":
-		return node.Backend{}, nil
-	default:
-		return nil, fmt.Errorf("unknown language %q in canary.yml", lang)
-	}
 }

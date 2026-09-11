@@ -2,7 +2,6 @@ package manifest
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/tolvi-labs/canary/internal/gitutil"
 )
@@ -40,15 +39,16 @@ func overlaps(aStart, aEnd, bStart, bEnd int) bool {
 }
 
 // AllTestsUnderPackage returns every test with any coverage entry for a
-// file under the given repo-relative package directory (empty string for
-// the module root). Used as the safe fallback when that package's
-// coverage could not be rebuilt (a compile failure): force-include
-// everything known about it rather than trust a selection that might no
-// longer align with the code.
+// file within the given repo-relative unit scope — a package directory
+// for Go, a test-file path for Python/Node, "" for the module root. Used
+// as the safe fallback when that unit's coverage could not be rebuilt (a
+// compile or collection failure): force-include everything known about
+// it rather than trust a selection that might no longer align with the
+// code.
 func AllTestsUnderPackage(m GlobalManifest, packageDir string) []string {
 	set := map[string]bool{}
 	for file, ranges := range m.Coverage {
-		if !isUnderPackage(file, packageDir) {
+		if !FileInScope(file, packageDir) {
 			continue
 		}
 		for _, r := range ranges {
@@ -63,11 +63,4 @@ func AllTestsUnderPackage(m GlobalManifest, packageDir string) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func isUnderPackage(file, packageDir string) bool {
-	if packageDir == "" {
-		return !strings.Contains(file, "/")
-	}
-	return file == packageDir || strings.HasPrefix(file, packageDir+"/")
 }

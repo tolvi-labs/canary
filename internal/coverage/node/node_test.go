@@ -3,6 +3,7 @@ package node
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tolvi-labs/canary/internal/coverage"
@@ -174,6 +175,74 @@ func TestUnitTests_ExactNameMatch(t *testing.T) {
 	}
 	if lineCovered(sendsTwice, "substr.js", 1) {
 		t.Fatalf("expected \"sends twice\" to NOT cover line 1 (sendsOnce) — substring-match leak, got: %+v", sendsTwice)
+	}
+}
+
+// TestUnitTests_FileThatFailsToLoadIsAnError is the regression test for
+// a phantom test. node:test reports a file that won't load (syntax
+// error, missing require) as a single failing top-level TAP point named
+// after the *file* — "not ok 1 - broken.test.js" — which the name parse
+// happily took for a real test. That wrote a test named "broken.test.js"
+// into the durable manifest, left DegradedPackages empty, and lost the
+// file's real tests without a word. It must be an error instead, so the
+// manifest records the unit as degraded.
+func TestUnitTests_FileThatFailsToLoadIsAnError(t *testing.T) {
+	repoDir := copyFixtureDir(t, "testdata/fixture-broken")
+	workDir := t.TempDir()
+
+	result, err := (Backend{}).UnitTests(repoDir, "fixture-broken", "broken.test.js", workDir)
+	if err == nil {
+		t.Fatalf("expected an error for a file that fails to load, got results: %v", result)
+	}
+	if _, phantom := result["broken.test.js"]; phantom {
+		t.Fatalf("the unit file itself was recorded as a test: %v", result)
+	}
+	if !strings.Contains(err.Error(), "broken.test.js") {
+		t.Fatalf("expected the error to name the unit, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no-such-module") {
+		t.Fatalf("expected the error to carry node's own diagnosis, got: %v", err)
+	}
+}
+
+// TestUnitTests_SuiteLineIsNotATest is the regression test for
+// describe/it suites. node:test emits a TAP point for the `describe`
+// suite as well as for each `it` inside it, and trimming every line
+// before matching erased the indentation and the type marker that tell
+// them apart — so an N-test suite produced N+1 "tests", costing a bogus
+// extra coverage invocation and writing a suite-named entry into the
+// manifest that no runner can ever execute. Only the real `it`/`test`
+// cases may come back.
+func TestUnitTests_SuiteLineIsNotATest(t *testing.T) {
+	repoDir := copyFixtureDir(t, "testdata/fixture-suite")
+	workDir := t.TempDir()
+
+	result, err := (Backend{}).UnitTests(repoDir, "fixture-suite", "suite.test.js", workDir)
+	if err != nil {
+		t.Fatalf("UnitTests failed: %v", err)
+	}
+	if _, suite := result["outer suite"]; suite {
+		t.Fatalf("the describe suite was recorded as a test: %v", result)
+	}
+	if len(result) != 3 {
+		t.Fatalf("expected exactly 3 tests (covers alpha, covers beta, covers gamma), got %d: %v", len(result), result)
+	}
+	for _, name := range []string{"covers alpha", "covers beta", "covers gamma"} {
+		if _, ok := result[name]; !ok {
+			t.Fatalf("expected %q in results, got: %v", name, result)
+		}
+	}
+	// The nested `it` cases must still be instrumented individually —
+	// excluding the suite point must not cost the tests inside it their
+	// own isolated coverage.
+	if !lineCovered(result["covers alpha"], "slib.js", 1) {
+		t.Fatalf("expected \"covers alpha\" to cover line 1 (alpha), got: %+v", result["covers alpha"])
+	}
+	if lineCovered(result["covers alpha"], "slib.js", 2) {
+		t.Fatalf("expected \"covers alpha\" to NOT cover line 2 (beta), got: %+v", result["covers alpha"])
+	}
+	if !lineCovered(result["covers beta"], "slib.js", 2) {
+		t.Fatalf("expected \"covers beta\" to cover line 2 (beta), got: %+v", result["covers beta"])
 	}
 }
 

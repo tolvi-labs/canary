@@ -46,6 +46,10 @@ func (Backend) ModulePath(repoDir string) (string, error) {
 	return filepath.Base(abs), nil // birdie-os-extension has no package.json at all — the directory name is the fallback
 }
 
+// SourceExtensions returns the JavaScript extensions node:test runs —
+// the same suffixes TouchedUnits already filters changed files by.
+func (Backend) SourceExtensions() []string { return []string{".js", ".mjs", ".cjs"} }
+
 // ListUnits returns every *.test.js/.mjs/.cjs file under repoDir, as
 // repo-relative paths. There is no `go list`/`pytest --collect-only`
 // equivalent; this is a plain file walk, matching how node:test itself
@@ -153,6 +157,23 @@ func (b Backend) TouchedUnits(repoDir string, changedFiles []string) []string {
 
 // listTestNames runs unit under node:test with the TAP reporter (no
 // coverage) purely to enumerate its test names — "ok N - <name>" lines.
+//
+// Two TAP points must NOT be treated as test names:
+//
+//   - A `describe` suite emits its own summary point alongside the
+//     points for the `it`/`test` cases inside it, carrying `type:
+//     'suite'` in its YAML diagnostic block where a real test carries
+//     `type: 'test'`. Counting it would cost an extra per-test coverage
+//     invocation and write a suite-named entry into the manifest that
+//     no CI invocation can ever run as a test.
+//
+//   - A file that fails to load at all (syntax error, missing require)
+//     is reported by node:test as a single failing top-level point named
+//     after the file itself — `not ok 1 - broken.test.js`. Treating that
+//     as a test name would fabricate a phantom test in the durable
+//     manifest while the file's real tests, which never ran, vanish
+//     silently. It is returned as an error instead, so UnitTests fails
+//     and the manifest records the unit in DegradedPackages.
 func listTestNames(repoDir, unit string) ([]string, error) {
 	cmd := exec.Command("node", "--test", "--test-reporter=tap", unit)
 	cmd.Dir = repoDir
@@ -172,17 +193,75 @@ func listTestNames(repoDir, unit string) ([]string, error) {
 		// non-zero on failure); TAP output was still produced on stdout
 		// and still lists correctly. Fall through and parse it.
 	}
+
+	type tapPoint struct {
+		name    string
+		indent  int
+		failed  bool
+		isSuite bool
+	}
 	var names []string
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "ok ") || strings.HasPrefix(line, "not ok ") {
-			// "ok 1 - add works" / "not ok 1 - add works"
-			idx := strings.Index(line, "- ")
-			if idx >= 0 {
-				names = append(names, line[idx+2:])
-			}
+	var diagnostics []string
+	var loadFailed bool
+	var cur *tapPoint
+	sawPoint := false
+
+	finish := func(p *tapPoint) {
+		if p == nil || p.isSuite || p.name == "" {
+			return
 		}
+		if p.failed && p.indent == 0 && p.name == unit {
+			// node:test reported the unit file itself as the failing
+			// test point: the file never loaded.
+			loadFailed = true
+			return
+		}
+		names = append(names, p.name)
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		raw := scanner.Text()
+		trimmed := strings.TrimSpace(raw)
+		indent := len(raw) - len(strings.TrimLeft(raw, " "))
+
+		if strings.HasPrefix(trimmed, "ok ") || strings.HasPrefix(trimmed, "not ok ") {
+			finish(cur)
+			sawPoint = true
+			name := ""
+			if idx := strings.Index(trimmed, "- "); idx >= 0 {
+				name = trimmed[idx+2:]
+			}
+			cur = &tapPoint{name: name, indent: indent, failed: strings.HasPrefix(trimmed, "not ok ")}
+			continue
+		}
+		// A point's YAML diagnostic block is indented relative to the
+		// point line itself; nested points are emitted before their
+		// parent's summary point, so "more indented than the point we
+		// are currently holding" only ever means "part of its block".
+		if cur != nil && indent > cur.indent && trimmed == "type: 'suite'" {
+			cur.isSuite = true
+			continue
+		}
+		// node prints an unhandled load error as TAP comments before any
+		// test point; those lines are the only useful diagnosis of a
+		// file-level failure, so keep a bounded number of them.
+		if !sawPoint && strings.HasPrefix(trimmed, "# ") && !strings.HasPrefix(trimmed, "# Subtest:") && len(diagnostics) < 8 {
+			diagnostics = append(diagnostics, strings.TrimPrefix(trimmed, "# "))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		// A truncated scan would silently return a partial test list,
+		// which is the same class of quiet data loss this parse exists to
+		// prevent — fail instead and let the unit be recorded as degraded.
+		return nil, fmt.Errorf("reading node:test TAP output for %s: %w", unit, err)
+	}
+	finish(cur)
+
+	if loadFailed {
+		return nil, fmt.Errorf("%s failed to load under node:test (reported as a failing test point named after the file itself)\n%s",
+			unit, strings.Join(diagnostics, "\n"))
 	}
 	return names, nil
 }

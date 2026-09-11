@@ -27,6 +27,10 @@ func (Backend) ModulePath(repoDir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// SourceExtensions returns Go's single source extension — the same
+// suffix TouchedUnits already filters changed files by.
+func (Backend) SourceExtensions() []string { return []string{".go"} }
+
 // ListUnits returns every package under repoDir, as repo-relative
 // "./dir" patterns (or "." for the module root) — usable directly both as
 // `go test` package arguments and, after stripping the leading "./", as
