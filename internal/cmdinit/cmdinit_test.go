@@ -105,6 +105,76 @@ func TestRun_ReusesExistingCanaryYml(t *testing.T) {
 	}
 }
 
+func setupPythonRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[project]\nname = \"fixture\"\n\n[tool.pytest.ini_options]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "mathutil"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mathutil", "__init__.py"), []byte("def add(a, b):\n    return a + b\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mathutil", "test_mathutil.py"), []byte("from mathutil import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-q", "-m", "base")
+	return dir
+}
+
+func TestRun_PythonRepoEndToEnd(t *testing.T) {
+	dir := setupPythonRepo(t)
+	code := Run([]string{"--repo", dir, "--lang", "python"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, ".canary", "global-manifest.json"))
+	if err != nil {
+		t.Fatalf("expected manifest file to exist: %v", err)
+	}
+	if !strings.Contains(string(raw), "test_add") {
+		t.Fatalf("expected test_add in manifest, got: %s", raw)
+	}
+}
+
+func setupNodeRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(dir, "lib.js"), []byte("function add(a, b) { return a + b; }\nmodule.exports = { add };\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "lib.test.js"), []byte("const { test } = require('node:test');\nconst assert = require('node:assert');\nconst { add } = require('./lib.js');\n\ntest('add works', () => {\n  assert.strictEqual(add(2, 3), 5);\n});\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-q", "-m", "base")
+	return dir
+}
+
+func TestRun_NodeRepoEndToEnd(t *testing.T) {
+	dir := setupNodeRepo(t)
+	code := Run([]string{"--repo", dir, "--lang", "node"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, ".canary", "global-manifest.json"))
+	if err != nil {
+		t.Fatalf("expected manifest file to exist: %v", err)
+	}
+	if !strings.Contains(string(raw), "add works") {
+		t.Fatalf("expected \"add works\" in manifest, got: %s", raw)
+	}
+}
+
 func TestRun_LangFlagOverridesDetection(t *testing.T) {
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-q")
