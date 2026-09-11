@@ -109,3 +109,28 @@ func TestUnitTests_NoTests(t *testing.T) {
 		t.Fatalf("expected 0 tests, got %d: %v", len(result), result)
 	}
 }
+
+// TestUnitTests_DoesNotLeakUnrelatedFiles guards against UnitTests
+// attributing blocks from a file the unit under test never imports.
+// testdata/fixture/other/unused.py is never imported by
+// mathutil/test_mathutil.py, so it must never appear in that unit's
+// results — even though coverage.py's own JSON report (scoped to the
+// whole repoDir, not just this unit's module) includes it as a
+// 0%-covered file regardless.
+func TestUnitTests_DoesNotLeakUnrelatedFiles(t *testing.T) {
+	repoDir := copyFixture(t)
+	workDir := t.TempDir()
+
+	result, err := (Backend{}).UnitTests(repoDir, "fixture", "mathutil/test_mathutil.py", workDir)
+	if err != nil {
+		t.Fatalf("UnitTests failed: %v", err)
+	}
+
+	for testName, blocks := range result {
+		for _, b := range blocks {
+			if b.File == "other/unused.py" {
+				t.Fatalf("test %q unexpectedly covers unrelated file %q: %+v", testName, b.File, b)
+			}
+		}
+	}
+}

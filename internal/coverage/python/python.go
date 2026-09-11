@@ -3,6 +3,7 @@ package python
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -48,7 +49,21 @@ func (Backend) ModulePath(repoDir string) (string, error) {
 func (Backend) ListUnits(repoDir string) ([]string, error) {
 	cmd := exec.Command("python3", "-m", "pytest", "--collect-only", "-q")
 	cmd.Dir = repoDir
-	out, _ := cmd.Output() // a collection error for one file shouldn't abort listing every other file; UnitTests reports per-file failures individually
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			// The command never ran at all (e.g. python3/pytest missing
+			// from PATH) — Python coverage is non-functional for the
+			// whole repo, not just degraded for one file. Surface it
+			// rather than silently reporting zero units.
+			return nil, fmt.Errorf("python3 -m pytest --collect-only: %w", err)
+		}
+		// A non-zero exit with a collection error in one file shouldn't
+		// abort listing every other file; UnitTests reports per-file
+		// failures individually. Fall through and parse whatever was
+		// collected.
+	}
 	seen := map[string]bool{}
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
@@ -112,9 +127,11 @@ func (Backend) UnitTests(repoDir, modulePath, unit, workDir string) (map[string]
 	jsonCmd := exec.Command("python3", "-m", "coverage", "json", "--show-contexts", "-o", "-")
 	jsonCmd.Dir = repoDir
 	jsonCmd.Env = append(os.Environ(), "COVERAGE_FILE="+dataFile)
+	var jsonStderr bytes.Buffer
+	jsonCmd.Stderr = &jsonStderr
 	jsonOut, err := jsonCmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("coverage json for %s: %w", unit, err)
+		return nil, fmt.Errorf("coverage json for %s: %w\n%s", unit, err, jsonStderr.String())
 	}
 
 	var report coverageJSON
@@ -122,15 +139,38 @@ func (Backend) UnitTests(repoDir, modulePath, unit, workDir string) (map[string]
 		return nil, fmt.Errorf("parsing coverage json for %s: %w", unit, err)
 	}
 
+	// relFile is computed once per raw file path (not once per pass) —
+	// filepath.Rel is called from two loops below and always returns the
+	// same answer for the same file.
+	relFileCache := map[string]string{}
+	relFileFor := func(file string) string {
+		if rf, ok := relFileCache[file]; ok {
+			return rf
+		}
+		rf, relErr := filepath.Rel(repoDir, file)
+		if relErr != nil {
+			rf = file
+		}
+		relFileCache[file] = rf
+		return rf
+	}
+
 	result := map[string][]coverage.Block{}
 	testNames := map[string]bool{}
+	// touchedFiles is the set of files this unit's test session actually
+	// attributed to a real test somewhere — NOT every file coverage.py
+	// happened to report on. --cov=repoDir measures the whole repo (so
+	// that pytest-cov can find the module under test without our own
+	// code knowing where it lives), so report.Files also includes files
+	// this unit's tests never imported at all, each 0%-covered with
+	// every line in MissingLines. Without this filter, pass 2 below
+	// would attribute every one of THOSE unrelated files' lines as
+	// Count:0 blocks to every test in this unit too.
+	touchedFiles := map[string]bool{}
 	// One pass to discover every test name mentioned anywhere, and to
 	// record each test's directly-covered lines.
 	for file, data := range report.Files {
-		relFile, relErr := filepath.Rel(repoDir, file)
-		if relErr != nil {
-			relFile = file
-		}
+		relFile := relFileFor(file)
 		for lineStr, contexts := range data.Contexts {
 			line := atoiOrZero(lineStr)
 			for _, ctx := range contexts {
@@ -139,6 +179,7 @@ func (Backend) UnitTests(repoDir, modulePath, unit, workDir string) (map[string]
 				}
 				testName := testNameFromContext(ctx)
 				testNames[testName] = true
+				touchedFiles[file] = true
 				result[testName] = append(result[testName], coverage.Block{
 					File: relFile, StartLine: line, EndLine: line, Count: 1,
 				})
@@ -146,18 +187,18 @@ func (Backend) UnitTests(repoDir, modulePath, unit, workDir string) (map[string]
 		}
 	}
 	// Second pass: every test's block list also carries every genuinely
-	// never-executed line (Count: 0) in every file this run measured —
-	// mirroring the Go backend's own per-test profile, which always
-	// includes a package's zero-count blocks alongside its covered
-	// ones. Without this, an uncovered line with zero tests attributed
-	// would never reach manifest.buildFromPackages's `seen[k]`
-	// initialization at all.
+	// never-executed line (Count: 0), but only in files this unit's own
+	// tests actually touched (per touchedFiles above) — mirroring the Go
+	// backend's own per-test profile, which includes a *package's*
+	// zero-count blocks, not the whole module's. Without this pass, an
+	// uncovered line with zero tests attributed would never reach
+	// manifest.buildFromPackages's `seen[k]` initialization at all.
 	for testName := range testNames {
 		for file, data := range report.Files {
-			relFile, relErr := filepath.Rel(repoDir, file)
-			if relErr != nil {
-				relFile = file
+			if !touchedFiles[file] {
+				continue
 			}
+			relFile := relFileFor(file)
 			for _, line := range data.MissingLines {
 				result[testName] = append(result[testName], coverage.Block{
 					File: relFile, StartLine: line, EndLine: line, Count: 0,
