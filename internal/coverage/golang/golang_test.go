@@ -1,4 +1,4 @@
-package coverage
+package golang
 
 import (
 	"os"
@@ -36,7 +36,7 @@ func copyFixture(t *testing.T) string {
 
 func TestModulePath(t *testing.T) {
 	repoDir := copyFixture(t)
-	got, err := ModulePath(repoDir)
+	got, err := Backend{}.ModulePath(repoDir)
 	if err != nil {
 		t.Fatalf("ModulePath failed: %v", err)
 	}
@@ -47,9 +47,9 @@ func TestModulePath(t *testing.T) {
 
 func TestListPackages(t *testing.T) {
 	repoDir := copyFixture(t)
-	got, err := ListPackages(repoDir)
+	got, err := Backend{}.ListUnits(repoDir)
 	if err != nil {
-		t.Fatalf("ListPackages failed: %v", err)
+		t.Fatalf("ListUnits failed: %v", err)
 	}
 	if len(got) != 1 || got[0] != "./mathutil" {
 		t.Fatalf("expected [\"./mathutil\"], got %v", got)
@@ -60,9 +60,9 @@ func TestPackageTests(t *testing.T) {
 	repoDir := copyFixture(t)
 	workDir := t.TempDir()
 
-	result, err := PackageTests(repoDir, "fixture", "./mathutil", workDir)
+	result, err := Backend{}.UnitTests(repoDir, "fixture", "./mathutil", workDir)
 	if err != nil {
-		t.Fatalf("PackageTests failed: %v", err)
+		t.Fatalf("UnitTests failed: %v", err)
 	}
 	if len(result) != 1 {
 		t.Fatalf("expected 1 test, got %d: %v", len(result), result)
@@ -104,7 +104,7 @@ func TestPackageTests_NoTestFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := PackageTests(repoDir, "fixture", "./notested", workDir)
+	result, err := Backend{}.UnitTests(repoDir, "fixture", "./notested", workDir)
 	if err != nil {
 		t.Fatalf("expected no error for a package with no tests, got: %v", err)
 	}
