@@ -6,18 +6,33 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tolvi-labs/canary/internal/coverage"
 	"github.com/tolvi-labs/canary/internal/coverage/golang"
+	"github.com/tolvi-labs/canary/internal/coverage/node"
+	"github.com/tolvi-labs/canary/internal/coverage/python"
 	"github.com/tolvi-labs/canary/internal/gitutil"
+	"github.com/tolvi-labs/canary/internal/langconfig"
 	"github.com/tolvi-labs/canary/internal/manifest"
 )
 
 // Run implements `canary refresh [--repo <dir>]`. It rebuilds coverage
-// only for packages touched since the manifest's BuiltAtSHA, and merges
+// only for units touched since the manifest's BuiltAtSHA, and merges
 // the result into the existing manifest.
 func Run(args []string) int {
 	fs := flag.NewFlagSet("refresh", flag.ContinueOnError)
 	repoDir := fs.String("repo", ".", "path to the repository")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	cfg, err := langconfig.Load(*repoDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "canary refresh: %v\n", err)
+		return 2
+	}
+	backend, err := selectBackend(cfg.Language)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "canary refresh: %v\n", err)
 		return 2
 	}
 
@@ -43,13 +58,13 @@ func Run(args []string) int {
 		return 2
 	}
 
-	touchedPackages := golang.Backend{}.TouchedUnits(*repoDir, changedFiles)
+	touchedPackages := backend.TouchedUnits(*repoDir, changedFiles)
 	if len(touchedPackages) == 0 {
-		fmt.Println("✓ No Go packages touched, nothing to refresh")
+		fmt.Println("✓ No units touched, nothing to refresh")
 		return 0
 	}
 
-	updated, err := manifest.Refresh(existing, *repoDir, touchedPackages, golang.Backend{})
+	updated, err := manifest.Refresh(existing, *repoDir, touchedPackages, backend)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "canary refresh: %v\n", err)
 		return 2
@@ -58,7 +73,7 @@ func Run(args []string) int {
 		fmt.Fprintf(os.Stderr, "canary refresh: %v\n", err)
 		return 2
 	}
-	fmt.Printf("✓ Refreshed %d package(s)\n", len(touchedPackages))
+	fmt.Printf("✓ Refreshed %d unit(s)\n", len(touchedPackages))
 	if len(updated.DegradedPackages) > 0 {
 		fmt.Printf("⚠ %d package(s) could not be built for coverage and are excluded from selection-narrowing: %s\n", len(updated.DegradedPackages), strings.Join(updated.DegradedPackages, ", "))
 		for _, w := range updated.BuildWarnings {
@@ -66,4 +81,20 @@ func Run(args []string) int {
 		}
 	}
 	return 0
+}
+
+// selectBackend maps a canary.yml language string to its coverage.Backend.
+// Duplicated from cmdinit deliberately — two ~10-line switch statements
+// don't justify a shared package yet.
+func selectBackend(lang string) (coverage.Backend, error) {
+	switch lang {
+	case "go":
+		return golang.Backend{}, nil
+	case "python":
+		return python.Backend{}, nil
+	case "node":
+		return node.Backend{}, nil
+	default:
+		return nil, fmt.Errorf("unknown language %q in canary.yml", lang)
+	}
 }
