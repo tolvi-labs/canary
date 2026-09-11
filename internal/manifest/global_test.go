@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/tolvi-labs/canary/internal/coverage/golang"
 )
 
 func runGit(t *testing.T, dir string, args ...string) {
@@ -76,7 +78,7 @@ func TestBuild(t *testing.T) {
 	repoDir := copyFixtureRepo(t)
 	head := gitRevParse(t, repoDir)
 
-	m, err := Build(repoDir)
+	m, err := Build(repoDir, golang.Backend{})
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -107,7 +109,7 @@ func TestBuild(t *testing.T) {
 
 func TestRefresh_OnlyRebuildsTouchedPackage(t *testing.T) {
 	repoDir := copyFixtureRepo(t)
-	existing, err := Build(repoDir)
+	existing, err := Build(repoDir, golang.Backend{})
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -121,7 +123,7 @@ func TestRefresh_OnlyRebuildsTouchedPackage(t *testing.T) {
 	runGit(t, repoDir, "commit", "-q", "-am", "add Bye")
 	newHead := gitRevParse(t, repoDir)
 
-	updated, err := Refresh(existing, repoDir, []string{"./greet"})
+	updated, err := Refresh(existing, repoDir, []string{"./greet"}, golang.Backend{})
 	if err != nil {
 		t.Fatalf("Refresh failed: %v", err)
 	}
@@ -186,7 +188,7 @@ func copyFixtureDegradedRepo(t *testing.T) string {
 func TestBuild_DegradesCompileFailingPackageInsteadOfFailing(t *testing.T) {
 	repoDir := copyFixtureDegradedRepo(t)
 
-	m, err := Build(repoDir)
+	m, err := Build(repoDir, golang.Backend{})
 	if err != nil {
 		t.Fatalf("expected Build to succeed despite one broken package, got: %v", err)
 	}
@@ -214,7 +216,7 @@ func TestBuild_DegradesCompileFailingPackageInsteadOfFailing(t *testing.T) {
 func TestRefresh_DegradedPackageCarriesForwardWhenNotTouched(t *testing.T) {
 	repoDir := copyFixtureDegradedRepo(t)
 
-	m, err := Build(repoDir)
+	m, err := Build(repoDir, golang.Backend{})
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -235,7 +237,7 @@ func TestRefresh_DegradedPackageCarriesForwardWhenNotTouched(t *testing.T) {
 	}
 	runGit(t, repoDir, "commit", "-q", "-am", "tweak good")
 
-	updated, err := Refresh(m, repoDir, []string{"./good"})
+	updated, err := Refresh(m, repoDir, []string{"./good"}, golang.Backend{})
 	if err != nil {
 		t.Fatalf("Refresh failed: %v", err)
 	}

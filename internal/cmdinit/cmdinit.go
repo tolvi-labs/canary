@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/tolvi-labs/canary/internal/audit"
+	"github.com/tolvi-labs/canary/internal/coverage/golang"
 	"github.com/tolvi-labs/canary/internal/gate"
 	"github.com/tolvi-labs/canary/internal/manifest"
 	"github.com/tolvi-labs/canary/internal/report"
@@ -22,7 +23,7 @@ func Run(args []string) int {
 		return 2
 	}
 
-	m, err := manifest.Build(*repoDir)
+	m, err := manifest.Build(*repoDir, golang.Backend{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "canary init: %v\n", err)
 		return 2

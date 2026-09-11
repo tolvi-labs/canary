@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tolvi-labs/canary/internal/coverage/golang"
 	"github.com/tolvi-labs/canary/internal/gitutil"
 	"github.com/tolvi-labs/canary/internal/manifest"
 )
@@ -42,13 +43,13 @@ func Run(args []string) int {
 		return 2
 	}
 
-	touchedPackages := touchedPackagesFor(*repoDir, changedFiles)
+	touchedPackages := golang.Backend{}.TouchedUnits(*repoDir, changedFiles)
 	if len(touchedPackages) == 0 {
 		fmt.Println("✓ No Go packages touched, nothing to refresh")
 		return 0
 	}
 
-	updated, err := manifest.Refresh(existing, *repoDir, touchedPackages)
+	updated, err := manifest.Refresh(existing, *repoDir, touchedPackages, golang.Backend{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "canary refresh: %v\n", err)
 		return 2
