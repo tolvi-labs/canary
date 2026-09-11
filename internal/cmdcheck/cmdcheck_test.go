@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/tolvi-labs/canary/internal/cmdinit"
 	"github.com/tolvi-labs/canary/internal/coverage/golang"
 	"github.com/tolvi-labs/canary/internal/manifest"
 )
@@ -50,6 +51,9 @@ func setupRepo(t *testing.T) string {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "mathutil", "mathutil_test.go"), []byte("package mathutil\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(2, 3) != 5 {\n\t\tt.Fatal(\"bad add\")\n\t}\n}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "canary.yml"), []byte("language: go\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, dir, "add", "-A")
@@ -140,5 +144,164 @@ func TestRun_RequiresBaseFlag(t *testing.T) {
 	code := Run([]string{"--repo", dir})
 	if code != 2 {
 		t.Fatalf("expected exit 2 without --base, got %d", code)
+	}
+}
+
+func TestRun_RequiresCanaryYml(t *testing.T) {
+	dir := setupRepo(t)
+	if err := os.Remove(filepath.Join(dir, "canary.yml")); err != nil {
+		t.Fatal(err)
+	}
+	head := gitRevParse(t, dir)
+	// `check` has to know which backend the repo uses to scope its
+	// unmapped-code safety net, so — like `refresh` — it can't proceed
+	// without canary.yml and must not quietly assume a language.
+	code := Run([]string{"--repo", dir, "--base", head, "--head", "HEAD"})
+	if code != 2 {
+		t.Fatalf("expected exit 2 with no canary.yml, got %d", code)
+	}
+}
+
+func TestRun_RejectsLanguageWithNoProjectMarker(t *testing.T) {
+	dir := setupRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "canary.yml"), []byte("language: python\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	head := gitRevParse(t, dir)
+	// A pure-Go repo declaring python used to check out green with zero
+	// tests selected; a misconfigured repo must fail loudly instead.
+	code := Run([]string{"--repo", dir, "--base", head, "--head", "HEAD"})
+	if code != 2 {
+		t.Fatalf("expected exit 2 for a language with no matching project marker, got %d", code)
+	}
+}
+
+// readReport runs the gate and parses its JSON output.
+func readReport(t *testing.T, dir, base string) map[string]interface{} {
+	t.Helper()
+	jsonOut := filepath.Join(t.TempDir(), "report.json")
+	if code := Run([]string{"--repo", dir, "--base", base, "--head", "HEAD", "--json-out", jsonOut}); code != 0 {
+		t.Fatalf("expected exit 0 from canary check, got %d", code)
+	}
+	raw, err := os.ReadFile(jsonOut)
+	if err != nil {
+		t.Fatalf("reading json-out: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	return parsed
+}
+
+func selectedTestNames(t *testing.T, report map[string]interface{}) []string {
+	t.Helper()
+	raw, _ := report["selected_tests"].([]interface{})
+	var out []string
+	for _, r := range raw {
+		out = append(out, r.(map[string]interface{})["test"].(string))
+	}
+	return out
+}
+
+// TestEndToEnd_PythonInitThenCheck is one of the two end-to-end tests the
+// design called for and the branch shipped without: `canary init`
+// followed by a real two-commit diff through `canary check`, for a
+// non-Go repo. Its absence is why the gate's safety net could be
+// hardcoded to ".go" and go unnoticed — no test ever ran the gate
+// against a Python or Node repo at all.
+func TestEndToEnd_PythonInitThenCheck(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "test")
+	writeFile(t, dir, "pyproject.toml", "[project]\nname = \"fixture\"\nversion = \"0\"\n\n[tool.pytest.ini_options]\n")
+	writeFile(t, dir, "mathutil/__init__.py", "def add(a, b):\n    return a + b\n")
+	writeFile(t, dir, "mathutil/test_mathutil.py", "from mathutil import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-q", "-m", "base")
+
+	if code := cmdinit.Run([]string{"--repo", dir, "--lang", "python"}); code != 0 {
+		t.Fatalf("canary init failed with exit %d", code)
+	}
+	base := gitRevParse(t, dir)
+
+	// Commit 2: edit a covered line. The gate should narrow to test_add.
+	writeFile(t, dir, "mathutil/__init__.py", "def add(a, b):\n    return b + a\n")
+	runGit(t, dir, "commit", "-q", "-am", "tweak add")
+
+	report := readReport(t, dir, base)
+	if report["manifest_status"] != "fresh" {
+		t.Fatalf("expected fresh, got %v", report["manifest_status"])
+	}
+	selected := selectedTestNames(t, report)
+	if len(selected) != 1 || selected[0] != "test_add" {
+		t.Fatalf("expected exactly [test_add], got %v", selected)
+	}
+
+	// Commit 3: add a brand-new, entirely untested Python file. The
+	// manifest has no coverage for it at all, so the gate must fall back
+	// to the full suite rather than select nothing.
+	writeFile(t, dir, "mathutil/untested.py", "def brand_new():\n    return 1\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-q", "-m", "add an untested module")
+
+	report = readReport(t, dir, base)
+	if report["manifest_status"] != "partial-fallback" {
+		t.Fatalf("expected partial-fallback for an unmapped .py file, got %v (selected %v)", report["manifest_status"], selectedTestNames(t, report))
+	}
+	if got := selectedTestNames(t, report); len(got) != 1 || got[0] != "test_add" {
+		t.Fatalf("expected the full suite, got %v", got)
+	}
+}
+
+// TestEndToEnd_NodeInitThenCheck is the Node half of the same gap.
+func TestEndToEnd_NodeInitThenCheck(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "test")
+	writeFile(t, dir, "lib.js", "function add(a, b) { return a + b; }\nmodule.exports = { add };\n")
+	writeFile(t, dir, "lib.test.js", "const { test } = require('node:test');\nconst assert = require('node:assert');\nconst { add } = require('./lib.js');\n\ntest('add works', () => {\n  assert.strictEqual(add(2, 3), 5);\n});\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-q", "-m", "base")
+
+	if code := cmdinit.Run([]string{"--repo", dir, "--lang", "node"}); code != 0 {
+		t.Fatalf("canary init failed with exit %d", code)
+	}
+	base := gitRevParse(t, dir)
+
+	writeFile(t, dir, "lib.js", "function add(a, b) { return b + a; }\nmodule.exports = { add };\n")
+	runGit(t, dir, "commit", "-q", "-am", "tweak add")
+
+	report := readReport(t, dir, base)
+	if report["manifest_status"] != "fresh" {
+		t.Fatalf("expected fresh, got %v", report["manifest_status"])
+	}
+	if got := selectedTestNames(t, report); len(got) != 1 || got[0] != "add works" {
+		t.Fatalf("expected exactly [add works], got %v", got)
+	}
+
+	writeFile(t, dir, "untested.js", "function brandNew() { return 1; }\nmodule.exports = { brandNew };\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-q", "-m", "add an untested module")
+
+	report = readReport(t, dir, base)
+	if report["manifest_status"] != "partial-fallback" {
+		t.Fatalf("expected partial-fallback for an unmapped .js file, got %v (selected %v)", report["manifest_status"], selectedTestNames(t, report))
+	}
+	if got := selectedTestNames(t, report); len(got) != 1 || got[0] != "add works" {
+		t.Fatalf("expected the full suite, got %v", got)
+	}
+}
+
+func writeFile(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	path := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
 	}
 }

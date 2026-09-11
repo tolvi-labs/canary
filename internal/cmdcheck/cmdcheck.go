@@ -8,6 +8,7 @@ import (
 
 	"github.com/tolvi-labs/canary/internal/gate"
 	"github.com/tolvi-labs/canary/internal/gitutil"
+	"github.com/tolvi-labs/canary/internal/langconfig"
 	"github.com/tolvi-labs/canary/internal/manifest"
 	"github.com/tolvi-labs/canary/internal/provenancereport"
 	"github.com/tolvi-labs/canary/internal/report"
@@ -38,6 +39,18 @@ func Run(args []string) int {
 		return 2
 	}
 
+	// The gate's unmapped-code safety net is scoped by the repo's own
+	// backend, so `check` has to resolve canary.yml exactly the way
+	// `init` and `refresh` do. Without it the net was hardcoded to Go and
+	// silently selected nothing for a brand-new untested file in any
+	// other language — the one failure mode a test gate exists to
+	// prevent.
+	_, backend, err := langconfig.Resolve(*repoDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "canary check: %v\n", err)
+		return 2
+	}
+
 	m, loadErr := manifest.Load(*repoDir)
 	manifestStale := true
 	if loadErr == nil {
@@ -55,7 +68,6 @@ func Run(args []string) int {
 	var changedFiles []string
 	var changedRanges map[string][]gitutil.LineRange
 	if *gateMode == "pr" {
-		var err error
 		changedFiles, err = gitutil.ChangedFiles(*repoDir, *base, *head)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "canary check: %v\n", err)
@@ -80,7 +92,7 @@ func Run(args []string) int {
 		return 2
 	}
 
-	result := gate.Check(*gateMode, m, manifestStale, changedFiles, changedRanges, decisions, provReport)
+	result := gate.Check(*gateMode, m, manifestStale, changedFiles, changedRanges, decisions, provReport, backend.SourceExtensions())
 
 	fmt.Println(report.ToHuman(result, *base, *head))
 

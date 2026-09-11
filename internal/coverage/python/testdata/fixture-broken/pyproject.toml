@@ -1,0 +1,6 @@
+[project]
+name = "fixture-broken"
+version = "0"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]

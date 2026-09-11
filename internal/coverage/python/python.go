@@ -46,8 +46,18 @@ func (Backend) ModulePath(repoDir string) (string, error) {
 // coverage.py's context feature attributes to individual tests within
 // one file in a single run, so per-file is the right granularity for
 // the "how many processes do we launch" question.
+//
+// A file that fails to collect (import error, syntax error) emits no
+// "<file>::<test>" line at all, so it is invisible to the collected-test
+// parse — it is recovered separately from pytest's own "ERROR collecting
+// <path>" reporting and returned as a unit anyway. UnitTests will then
+// fail on it and the manifest will record it in DegradedPackages, which
+// is the whole point: a file whose tests can't be enumerated must be
+// loudly degraded, never silently dropped from coverage.
+// --continue-on-collection-errors keeps one broken file from truncating
+// the collection of everything after it.
 func (Backend) ListUnits(repoDir string) ([]string, error) {
-	cmd := exec.Command("python3", "-m", "pytest", "--collect-only", "-q")
+	cmd := exec.Command("python3", "-m", "pytest", "--collect-only", "-q", "--continue-on-collection-errors")
 	cmd.Dir = repoDir
 	out, err := cmd.Output()
 	if err != nil {
@@ -67,11 +77,14 @@ func (Backend) ListUnits(repoDir string) ([]string, error) {
 	seen := map[string]bool{}
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
-		if !strings.Contains(line, "::") {
+		if strings.Contains(line, "::") {
+			file := strings.SplitN(line, "::", 2)[0]
+			if strings.HasSuffix(file, ".py") {
+				seen[file] = true
+			}
 			continue
 		}
-		file := strings.SplitN(line, "::", 2)[0]
-		if strings.HasSuffix(file, ".py") {
+		if file := collectionErrorFile(line); file != "" {
 			seen[file] = true
 		}
 	}
@@ -82,6 +95,48 @@ func (Backend) ListUnits(repoDir string) ([]string, error) {
 	sort.Strings(units)
 	return units, nil
 }
+
+// collectionErrorFile extracts the .py path from either of the two forms
+// pytest reports a collection failure in: the banner line
+//
+//	______ ERROR collecting mathutil/test_broken.py ______
+//
+// and the short-test-summary line
+//
+//	ERROR mathutil/test_broken.py
+//
+// Both are parsed because neither is guaranteed across pytest versions
+// and configurations (-q, --tb, plugins that reformat the summary); a
+// file recovered twice is deduplicated by the caller's set anyway.
+// Returns "" for any line that is not a collection error.
+func collectionErrorFile(line string) string {
+	trimmed := strings.Trim(line, "_= ")
+	var rest string
+	if i := strings.Index(trimmed, "ERROR collecting "); i >= 0 {
+		rest = trimmed[i+len("ERROR collecting "):]
+	} else if strings.HasPrefix(trimmed, "ERROR ") {
+		rest = strings.TrimPrefix(trimmed, "ERROR ")
+	} else {
+		return ""
+	}
+	rest = strings.TrimSpace(strings.Trim(rest, "_="))
+	// The summary form can carry a trailing " - <reason>", and either form
+	// can name a specific collected item as "<file>::<item>".
+	if i := strings.Index(rest, " "); i >= 0 {
+		rest = rest[:i]
+	}
+	if i := strings.Index(rest, "::"); i >= 0 {
+		rest = rest[:i]
+	}
+	if !strings.HasSuffix(rest, ".py") {
+		return ""
+	}
+	return rest
+}
+
+// SourceExtensions returns Python's single source extension — the same
+// suffix TouchedUnits already filters changed files by.
+func (Backend) SourceExtensions() []string { return []string{".py"} }
 
 type coverageJSON struct {
 	Files map[string]struct {
@@ -105,14 +160,18 @@ func (Backend) UnitTests(repoDir, modulePath, unit, workDir string) (map[string]
 		"--cov="+repoDir, "--cov-context=test", "--cov-report=")
 	runCmd.Dir = repoDir
 	runCmd.Env = append(os.Environ(), "COVERAGE_CORE=ctrace", "COVERAGE_FILE="+dataFile)
-	var stderr bytes.Buffer
-	runCmd.Stderr = &stderr
+	// pytest writes its failure report to stdout, not stderr, so both are
+	// captured: without stdout the degraded-unit warning would say only
+	// "exit status 2" and never name the import error behind it.
+	var output bytes.Buffer
+	runCmd.Stdout = &output
+	runCmd.Stderr = &output
 	if err := runCmd.Run(); err != nil {
 		if _, statErr := os.Stat(dataFile); statErr != nil {
 			// No coverage data at all — treat as "collection failed",
 			// same class of degraded-unit outcome the Go backend's
 			// compile-failure path represents.
-			return nil, fmt.Errorf("pytest %s: %w\n%s", unit, err, stderr.String())
+			return nil, fmt.Errorf("pytest %s: %w\n%s", unit, err, tailLines(output.String(), 8))
 		}
 		// pytest exits non-zero on a failing test, which still ran and
 		// still produced valid coverage data — not an error here (same
@@ -243,6 +302,23 @@ func (b Backend) TouchedUnits(repoDir string, changedFiles []string) []string {
 		return touchedTestFiles
 	}
 	return all
+}
+
+// tailLines returns at most the last n non-empty lines of s, so a
+// degraded-unit warning carries pytest's actual diagnosis (the traceback
+// tail and the "short test summary info" block) without pasting a whole
+// pytest session banner into `canary init`'s output.
+func tailLines(s string, n int) string {
+	var lines []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, strings.TrimRight(l, " \t"))
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func atoiOrZero(s string) int {

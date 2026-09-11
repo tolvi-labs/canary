@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tolvi-labs/canary/internal/coverage/golang"
+	"github.com/tolvi-labs/canary/internal/coverage/node"
 )
 
 func runGit(t *testing.T, dir string, args ...string) {
@@ -150,6 +151,121 @@ func TestRefresh_OnlyRebuildsTouchedPackage(t *testing.T) {
 	if !found {
 		t.Fatalf("expected TestBye in Tests, got: %v", updated.Tests)
 	}
+}
+
+// setupNodeRepo builds a one-file node:test repo, as the Node backend's
+// file-shaped units see it: the unit is "lib.test.js" and its coverage
+// lands on a *different* file, lib.js.
+func setupNodeRepo(t *testing.T) string {
+	t.Helper()
+	dst := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dst, "lib.js"), []byte("function add(a, b) { return a + b; }\nmodule.exports = { add };\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "lib.test.js"), []byte("const { test } = require('node:test');\nconst assert = require('node:assert');\nconst { add } = require('./lib.js');\n\ntest('add works', () => {\n  assert.strictEqual(add(2, 3), 5);\n});\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dst, "init", "-q")
+	runGit(t, dst, "config", "user.email", "test@example.com")
+	runGit(t, dst, "config", "user.name", "test")
+	runGit(t, dst, "add", "-A")
+	runGit(t, dst, "commit", "-q", "-m", "base")
+	return dst
+}
+
+// TestRefresh_RetiresRenamedTestForFileShapedUnit is the regression test
+// for `canary refresh` never converging on a Python/Node repo. A
+// file-shaped unit's coverage lands on source files the unit's own path
+// is not a prefix of, so the directory-prefix invalidation that is right
+// for a Go package cleared nothing: the OLD test name's attributions
+// survived every refresh, accumulating forever. A stale name is not
+// cosmetic — handed to `pytest -k` it exits 5, which most CI configs
+// read as a failed build, so "safely over-including" turns into a hard
+// red build on a test that no longer exists.
+func TestRefresh_RetiresRenamedTestForFileShapedUnit(t *testing.T) {
+	repoDir := setupNodeRepo(t)
+	backend := node.Backend{}
+
+	existing, err := Build(repoDir, backend)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	if got := existing.TestsByUnit["lib.test.js"]; len(got) != 1 || got[0] != "add works" {
+		t.Fatalf("expected TestsByUnit to record the unit's tests, got: %v", existing.TestsByUnit)
+	}
+	if !coveredBy(existing, "lib.js", "add works") {
+		t.Fatalf("expected \"add works\" to cover lib.js, got: %+v", existing.Coverage)
+	}
+
+	if err := os.WriteFile(filepath.Join(repoDir, "lib.test.js"), []byte("const { test } = require('node:test');\nconst assert = require('node:assert');\nconst { add } = require('./lib.js');\n\ntest('addition works', () => {\n  assert.strictEqual(add(2, 3), 5);\n});\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoDir, "commit", "-q", "-am", "rename the test")
+
+	updated, err := Refresh(existing, repoDir, []string{"lib.test.js"}, backend)
+	if err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+
+	for _, tn := range updated.Tests {
+		if tn == "add works" {
+			t.Fatalf("expected the renamed-away test to be retired from the registry, got: %v", updated.Tests)
+		}
+	}
+	if coveredBy(updated, "lib.js", "add works") {
+		t.Fatalf("expected the renamed-away test's coverage entries to be cleared, got: %+v", updated.Coverage)
+	}
+	if !coveredBy(updated, "lib.js", "addition works") {
+		t.Fatalf("expected the renamed test to cover lib.js, got: %+v", updated.Coverage)
+	}
+	if got := updated.TestsByUnit["lib.test.js"]; len(got) != 1 || got[0] != "addition works" {
+		t.Fatalf("expected TestsByUnit to track the rename, got: %v", updated.TestsByUnit)
+	}
+}
+
+// TestRefresh_KeepsTestNamesOfAUnitThatFailedToRebuild guards the other
+// direction: retirement must be driven by a build that actually
+// succeeded. A unit that breaks keeps everything previously known about
+// it, which is precisely what the degraded-unit fallback then
+// force-includes.
+func TestRefresh_KeepsTestNamesOfAUnitThatFailedToRebuild(t *testing.T) {
+	repoDir := setupNodeRepo(t)
+	backend := node.Backend{}
+
+	existing, err := Build(repoDir, backend)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repoDir, "lib.test.js"), []byte("const { test } = require('node:test');\nconst { add } = require('./gone.js');\n\ntest('add works', () => { add(1, 2); });\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoDir, "commit", "-q", "-am", "break the test file")
+
+	updated, err := Refresh(existing, repoDir, []string{"lib.test.js"}, backend)
+	if err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+	if len(updated.DegradedPackages) != 1 || updated.DegradedPackages[0] != "lib.test.js" {
+		t.Fatalf("expected [\"lib.test.js\"] in DegradedPackages, got: %v", updated.DegradedPackages)
+	}
+	if !coveredBy(updated, "lib.js", "add works") {
+		t.Fatalf("expected the broken unit's prior coverage to be preserved, got: %+v", updated.Coverage)
+	}
+	if got := updated.TestsByUnit["lib.test.js"]; len(got) != 1 || got[0] != "add works" {
+		t.Fatalf("expected the broken unit to keep its prior test names, got: %v", updated.TestsByUnit)
+	}
+}
+
+func coveredBy(m GlobalManifest, file, test string) bool {
+	for _, r := range m.Coverage[file] {
+		for _, tn := range r.Tests {
+			if tn == test {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func copyFixtureDegradedRepo(t *testing.T) string {

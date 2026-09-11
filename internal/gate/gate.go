@@ -45,6 +45,13 @@ type Result struct {
 // with any vault binding whose glob matches a changed file. A stale
 // manifest falls back to the full suite — the safe direction, never a
 // block.
+//
+// sourceExtensions comes from the repo's own coverage backend (via
+// canary.yml), and scopes the unmapped-code safety net below to the
+// files that backend's coverage is supposed to account for. It must
+// never be hardcoded: the net is what makes Canary a gate rather than a
+// suggestion, and a hardcoded language silently disables it everywhere
+// else. An empty list applies the net to every changed file.
 func Check(
 	gateMode string,
 	m manifest.GlobalManifest,
@@ -53,6 +60,7 @@ func Check(
 	changedRanges map[string][]gitutil.LineRange,
 	decisions []vault.Decision,
 	provReport *provenancereport.Report,
+	sourceExtensions []string,
 ) Result {
 	result := Result{Gate: gateMode, ManifestStatus: "fresh"}
 	result.DegradedPackages = m.DegradedPackages
@@ -68,33 +76,32 @@ func Check(
 		return result
 	}
 
-	degradedDirs := make(map[string]bool, len(m.DegradedPackages))
-	for _, d := range m.DegradedPackages {
-		degradedDirs[d] = true
-	}
 	for file := range changedRanges {
-		if !strings.HasSuffix(file, ".go") {
+		if !isSourceFile(file, sourceExtensions) {
 			continue
 		}
 		if _, ok := m.Coverage[file]; ok {
 			continue
 		}
-		// A file under a known degraded package isn't silently skipped —
+		// A file inside a known degraded unit isn't silently skipped —
 		// degradedPackageTests below already force-includes everything
-		// known about that package, but only if it actually has coverage
-		// history to pull from. A package that has never successfully
-		// compiled for coverage (e.g. a compile error from day one) has
-		// nothing in m.Coverage, so AllTestsUnderPackage would return
-		// nothing for it either. Only a degraded package with real
-		// coverage history is excluded here; a degraded package with zero
-		// history falls through to the same full-suite fallback as a file
-		// the manifest has never heard of at all.
-		dir := ""
-		if idx := strings.LastIndex(file, "/"); idx >= 0 {
-			dir = file[:idx]
+		// known about that unit, but only if it actually has coverage
+		// history to pull from. A unit that has never successfully built
+		// for coverage (e.g. a compile error from day one) has nothing in
+		// m.Coverage, so AllTestsUnderPackage would return nothing for it
+		// either. Only a degraded unit with real coverage history is
+		// excluded here; a degraded unit with zero history falls through
+		// to the same full-suite fallback as a file the manifest has
+		// never heard of at all.
+		var handledByDegraded bool
+		for _, scope := range degradedScopesFor(m.DegradedPackages, file) {
+			if len(manifest.AllTestsUnderPackage(m, scope)) > 0 {
+				handledByDegraded = true
+				break
+			}
 		}
-		if degradedDirs[dir] && len(manifest.AllTestsUnderPackage(m, dir)) > 0 {
-			continue // a degraded package with known coverage history is handled by degradedPackageTests below
+		if handledByDegraded {
+			continue
 		}
 		result.ManifestStatus = "partial-fallback"
 		result.SelectedTests = fullSuite(m, "unmapped-code-fallback")
@@ -131,34 +138,60 @@ func Check(
 	return result
 }
 
-// degradedPackageTests returns every test known for any package under
-// m.DegradedPackages that a changed file falls into — the safe-failure
-// default for a package whose coverage couldn't be rebuilt (a compile
-// failure): force-include everything known about it rather than trust a
-// coverage-based selection that might no longer align with the code.
+// degradedPackageTests returns every test known for any degraded unit a
+// changed file falls within — the safe-failure default for a unit whose
+// coverage couldn't be rebuilt (a Go compile failure, a pytest
+// collection error, a Node test file that won't load): force-include
+// everything known about it rather than trust a coverage-based selection
+// that might no longer align with the code.
 func degradedPackageTests(m manifest.GlobalManifest, changedFiles []string) []string {
 	if len(m.DegradedPackages) == 0 {
 		return nil
 	}
-	degraded := make(map[string]bool, len(m.DegradedPackages))
-	for _, d := range m.DegradedPackages {
-		degraded[d] = true
-	}
 	touched := map[string]bool{}
 	for _, f := range changedFiles {
-		dir := ""
-		if idx := strings.LastIndex(f, "/"); idx >= 0 {
-			dir = f[:idx]
-		}
-		if degraded[dir] {
-			touched[dir] = true
+		for _, scope := range degradedScopesFor(m.DegradedPackages, f) {
+			touched[scope] = true
 		}
 	}
 	var out []string
-	for dir := range touched {
-		out = append(out, manifest.AllTestsUnderPackage(m, dir)...)
+	for scope := range touched {
+		out = append(out, manifest.AllTestsUnderPackage(m, scope)...)
 	}
 	return dedupeSortedStrings(out)
+}
+
+// degradedScopesFor returns every degraded unit scope a changed file
+// falls within. Scopes are not all directories: a Go unit's scope is its
+// package directory, but a Python or Node unit's scope is a single test
+// file, which is why membership is tested with manifest.FileInScope
+// rather than by deriving the file's parent directory and looking that
+// up — a parent directory never equals a file path, so the directory
+// form silently matched nothing at all for the file-shaped backends.
+func degradedScopesFor(degraded []string, file string) []string {
+	var out []string
+	for _, scope := range degraded {
+		if manifest.FileInScope(file, scope) {
+			out = append(out, scope)
+		}
+	}
+	return out
+}
+
+// isSourceFile reports whether a changed file is one the repo's backend
+// produces coverage for. An empty extension list means "every file" —
+// the conservative reading, so a caller that failed to supply the repo's
+// real extensions over-triggers the fallback rather than disabling it.
+func isSourceFile(file string, extensions []string) bool {
+	if len(extensions) == 0 {
+		return true
+	}
+	for _, ext := range extensions {
+		if strings.HasSuffix(file, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func fullSuite(m manifest.GlobalManifest, reason string) []SelectedTest {

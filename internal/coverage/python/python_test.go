@@ -3,13 +3,18 @@ package python
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func copyFixture(t *testing.T) string {
 	t.Helper()
+	return copyFixtureDir(t, "testdata/fixture")
+}
+
+func copyFixtureDir(t *testing.T, src string) string {
+	t.Helper()
 	dst := t.TempDir()
-	src := "testdata/fixture"
 	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -29,7 +34,7 @@ func copyFixture(t *testing.T) string {
 		return os.WriteFile(target, data, 0644)
 	})
 	if err != nil {
-		t.Fatalf("copying fixture: %v", err)
+		t.Fatalf("copying fixture %s: %v", src, err)
 	}
 	return dst
 }
@@ -107,6 +112,50 @@ func TestUnitTests_NoTests(t *testing.T) {
 	}
 	if len(result) != 0 {
 		t.Fatalf("expected 0 tests, got %d: %v", len(result), result)
+	}
+}
+
+// TestListUnits_IncludesFileThatFailsCollection is the regression test
+// for a file whose collection fails being silently dropped. It emits no
+// "<file>::<test>" line at all, so the collected-test parse alone never
+// sees it — and the whole file, plus every test in it, vanished from the
+// manifest with no warning, no degraded entry, and exit 0. It must come
+// back as a unit so UnitTests can fail on it and the manifest can record
+// it as degraded.
+func TestListUnits_IncludesFileThatFailsCollection(t *testing.T) {
+	repoDir := copyFixtureDir(t, "testdata/fixture-broken")
+	got, err := (Backend{}).ListUnits(repoDir)
+	if err != nil {
+		t.Fatalf("ListUnits failed: %v", err)
+	}
+	want := []string{
+		"mathutil/test_a_good.py",
+		"mathutil/test_m_broken.py",
+		"mathutil/test_z_after_broken.py",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expected %v, got %v", want, got)
+		}
+	}
+}
+
+// TestUnitTests_CollectionFailureIsAnError pairs with the test above:
+// listing the broken file is only useful if instrumenting it then fails
+// loudly, which is what routes it into DegradedPackages/BuildWarnings.
+func TestUnitTests_CollectionFailureIsAnError(t *testing.T) {
+	repoDir := copyFixtureDir(t, "testdata/fixture-broken")
+	workDir := t.TempDir()
+
+	_, err := (Backend{}).UnitTests(repoDir, "fixture-broken", "mathutil/test_m_broken.py", workDir)
+	if err == nil {
+		t.Fatal("expected an error for a file that fails to collect")
+	}
+	if !strings.Contains(err.Error(), "a_module_that_does_not_exist") {
+		t.Fatalf("expected the error to carry pytest's own diagnosis, got: %v", err)
 	}
 }
 
