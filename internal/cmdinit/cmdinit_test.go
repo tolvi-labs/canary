@@ -70,3 +70,63 @@ func TestRun_AuditFlagPrintsUntestedPath(t *testing.T) {
 		t.Fatalf("expected Sub's untested path in audit output, got: %s", raw)
 	}
 }
+
+func TestRun_ScaffoldsCanaryYmlFromDetection(t *testing.T) {
+	dir := setupRepo(t)
+	code := Run([]string{"--repo", dir})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "canary.yml"))
+	if err != nil {
+		t.Fatalf("expected canary.yml to be scaffolded: %v", err)
+	}
+	if !strings.Contains(string(raw), "language: go") {
+		t.Fatalf("expected canary.yml to detect go, got: %s", raw)
+	}
+}
+
+func TestRun_ReusesExistingCanaryYml(t *testing.T) {
+	dir := setupRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "canary.yml"), []byte("language: go\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	code := Run([]string{"--repo", dir})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	// Unchanged — Run must not have rewritten it.
+	raw, err := os.ReadFile(filepath.Join(dir, "canary.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "language: go\n" {
+		t.Fatalf("expected canary.yml untouched, got: %s", raw)
+	}
+}
+
+func TestRun_LangFlagOverridesDetection(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "test")
+	// A repo with no go.mod at all, so bare detection would fail —
+	// --lang must skip Detect entirely.
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-q", "-m", "base")
+
+	code := Run([]string{"--repo", dir, "--lang", "python"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "canary.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "language: python") {
+		t.Fatalf("expected canary.yml to say python, got: %s", raw)
+	}
+}
