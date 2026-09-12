@@ -3,7 +3,7 @@ tags: [decision, canary]
 date: 2026-09-09
 repo: canary
 status: superseded
-superseded_by: [[2026-09-11-canary-multi-language-coverage]]
+superseded_by: 2026-09-11-canary-multi-language-coverage
 ticket: none
 user_impact: high
 product_area: Product scope

@@ -3,7 +3,7 @@ tags: [decision, canary]
 date: 2026-09-11
 repo: canary
 status: active
-supersedes: [[2026-09-09-canary-ships-as-go-cli]]
+supersedes: 2026-09-09-canary-ships-as-go-cli
 ticket: none
 user_impact: high
 product_area: Product scope
