@@ -257,6 +257,69 @@ func TestRefresh_KeepsTestNamesOfAUnitThatFailedToRebuild(t *testing.T) {
 	}
 }
 
+// TestRefresh_DoesNotRetireASharedNameWhenTestsByUnitIsIncomplete is the
+// regression test for N2: retirement must not act on an ownership index
+// that doesn't account for every known unit. Two units can legitimately
+// share a test name; if the manifest's TestsByUnit is missing an entry
+// for one of them (an older manifest upgraded mid-stream, or one that
+// predates this field), refreshing only the OTHER unit must not delete
+// the name from the registry — the unaccounted-for unit still produces
+// it and was never rebuilt this round.
+func TestRefresh_DoesNotRetireASharedNameWhenTestsByUnitIsIncomplete(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repoDir, "lib.js"), []byte("function add(a, b) { return a + b; }\nfunction sub(a, b) { return a - b; }\nmodule.exports = { add, sub };\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "a.test.js"), []byte("const { test } = require('node:test');\nconst assert = require('node:assert');\nconst { add } = require('./lib.js');\n\ntest('shared name', () => {\n  assert.strictEqual(add(2, 3), 5);\n});\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "b.test.js"), []byte("const { test } = require('node:test');\nconst assert = require('node:assert');\nconst { sub } = require('./lib.js');\n\ntest('shared name', () => {\n  assert.strictEqual(sub(5, 3), 2);\n});\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoDir, "init", "-q")
+	runGit(t, repoDir, "config", "user.email", "test@example.com")
+	runGit(t, repoDir, "config", "user.name", "test")
+	runGit(t, repoDir, "add", "-A")
+	runGit(t, repoDir, "commit", "-q", "-m", "base")
+
+	backend := node.Backend{}
+	existing, err := Build(repoDir, backend)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	if got := existing.TestsByUnit["b.test.js"]; len(got) != 1 || got[0] != "shared name" {
+		t.Fatalf("expected b.test.js to own \"shared name\" after a real Build, got: %v", existing.TestsByUnit)
+	}
+
+	// Simulate the realistic incomplete-index case directly: b.test.js's
+	// real, current ownership of "shared name" simply isn't recorded.
+	incomplete := existing
+	incomplete.TestsByUnit = map[string][]string{"a.test.js": append([]string{}, existing.TestsByUnit["a.test.js"]...)}
+
+	if err := os.WriteFile(filepath.Join(repoDir, "a.test.js"), []byte("const { test } = require('node:test');\nconst assert = require('node:assert');\nconst { add } = require('./lib.js');\n\ntest('renamed', () => {\n  assert.strictEqual(add(2, 3), 5);\n});\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoDir, "commit", "-q", "-am", "rename a.test.js's test")
+
+	updated, err := Refresh(incomplete, repoDir, []string{"a.test.js"}, backend)
+	if err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+
+	var found bool
+	for _, tn := range updated.Tests {
+		if tn == "shared name" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected \"shared name\" to survive (b.test.js still produces it and was never rebuilt this round), got: %v", updated.Tests)
+	}
+	if !coveredBy(updated, "lib.js", "shared name") {
+		t.Fatalf("expected b.test.js's coverage of \"shared name\" on lib.js to survive, got: %+v", updated.Coverage)
+	}
+}
+
 func coveredBy(m GlobalManifest, file, test string) bool {
 	for _, r := range m.Coverage[file] {
 		for _, tn := range r.Tests {
