@@ -153,6 +153,40 @@ func TestCheck_DegradedPackageWithNoCoverageHistoryFallsBackToFullSuite(t *testi
 	}
 }
 
+// TestCheck_DegradedPackageDoesNotCoverAnUnrelatedNestedSubPackage is the
+// regression test for N1: a Go package can contain a nested subdirectory
+// that is itself a *separate, unrelated* package (e.g. "broken" degraded,
+// "broken/sub" a distinct, healthy package with its own tests). The
+// degraded-scope check must not treat every file nested under "broken/"
+// as covered by "broken"'s own degradation — only "broken" itself. A
+// brand-new, untested file in the unrelated sibling package must still
+// trip the unmapped-code fallback.
+func TestCheck_DegradedPackageDoesNotCoverAnUnrelatedNestedSubPackage(t *testing.T) {
+	m := testManifest()
+	m.DegradedPackages = []string{"broken"}
+	m.Coverage["broken/broken.go"] = []manifest.CoveredRange{
+		{StartLine: 3, EndLine: 3, Tests: []string{"TestOldBroken"}},
+	}
+	m.Tests = append(m.Tests, "TestOldBroken")
+	// "broken/sub" is a distinct package nested under "broken"'s directory
+	// — not the degraded unit itself — receiving a brand-new untested file.
+	changedRanges := map[string][]gitutil.LineRange{
+		"broken/sub/newfile.go": {{Start: 1, End: 3}},
+	}
+	result := Check("pr", m, false, []string{"broken/sub/newfile.go"}, changedRanges, nil, nil, []string{".go"})
+	if result.ManifestStatus != "partial-fallback" {
+		t.Fatalf("expected partial-fallback (the unrelated sub-package must not be treated as covered by broken's degradation), got %s with selected: %+v", result.ManifestStatus, result.SelectedTests)
+	}
+	if len(result.SelectedTests) != 3 {
+		t.Fatalf("expected the full suite (3 tests), got: %+v", result.SelectedTests)
+	}
+	for _, s := range result.SelectedTests {
+		if s.Reason != "unmapped-code-fallback" {
+			t.Fatalf("expected reason unmapped-code-fallback, got: %+v", s)
+		}
+	}
+}
+
 // nodeManifest is a manifest as the Node backend produces one: units are
 // test *files*, and node:test excludes the test file itself from its
 // coverage report, so the only covered paths are plain source files.
