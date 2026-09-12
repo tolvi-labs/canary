@@ -320,6 +320,68 @@ func TestRefresh_DoesNotRetireASharedNameWhenTestsByUnitIsIncomplete(t *testing.
 	}
 }
 
+// TestRefresh_PermanentlyBrokenUnitDoesNotPermanentlyDisableRetirement is
+// the regression test for the follow-up gap N2's own fix introduced: a
+// unit that has never once compiled can never earn a TestsByUnit entry,
+// so without an exemption it would leave the ownership index incomplete
+// forever — even across repeated full `canary init` rebuilds — silently
+// disabling retirement for every OTHER, healthy unit too. A degraded
+// unit is exempt because it's known to own zero test names, not merely
+// unaccounted-for, so completeness (and retirement) must hold for the
+// rest of the manifest regardless of how long the broken unit stays
+// broken.
+func TestRefresh_PermanentlyBrokenUnitDoesNotPermanentlyDisableRetirement(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repoDir, "lib.js"), []byte("function add(a, b) { return a + b; }\nmodule.exports = { add };\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "a.test.js"), []byte("const { test } = require('node:test');\nconst assert = require('node:assert');\nconst { add } = require('./lib.js');\n\ntest('add works', () => {\n  assert.strictEqual(add(2, 3), 5);\n});\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "broken.test.js"), []byte("require('./does-not-exist.js');\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoDir, "init", "-q")
+	runGit(t, repoDir, "config", "user.email", "test@example.com")
+	runGit(t, repoDir, "config", "user.name", "test")
+	runGit(t, repoDir, "add", "-A")
+	runGit(t, repoDir, "commit", "-q", "-m", "base")
+
+	backend := node.Backend{}
+	existing, err := Build(repoDir, backend)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	if len(existing.DegradedPackages) != 1 || existing.DegradedPackages[0] != "broken.test.js" {
+		t.Fatalf("expected broken.test.js to be degraded, got: %v", existing.DegradedPackages)
+	}
+	if _, ok := existing.TestsByUnit["broken.test.js"]; ok {
+		t.Fatalf("expected the permanently-broken unit to have no TestsByUnit entry, got: %v", existing.TestsByUnit)
+	}
+	if !testsByUnitComplete(existing) {
+		t.Fatalf("expected completeness despite the permanently-broken unit (it's exempt), TestsByUnit: %v, DegradedPackages: %v", existing.TestsByUnit, existing.DegradedPackages)
+	}
+
+	if err := os.WriteFile(filepath.Join(repoDir, "a.test.js"), []byte("const { test } = require('node:test');\nconst assert = require('node:assert');\nconst { add } = require('./lib.js');\n\ntest('addition works', () => {\n  assert.strictEqual(add(2, 3), 5);\n});\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoDir, "commit", "-q", "-am", "rename a.test.js's test")
+
+	updated, err := Refresh(existing, repoDir, []string{"a.test.js"}, backend)
+	if err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+
+	for _, tn := range updated.Tests {
+		if tn == "add works" {
+			t.Fatalf("expected the renamed-away test to still be retired despite the unrelated permanently-broken unit, got: %v", updated.Tests)
+		}
+	}
+	if !coveredBy(updated, "lib.js", "addition works") {
+		t.Fatalf("expected the renamed test to cover lib.js, got: %+v", updated.Coverage)
+	}
+}
+
 func coveredBy(m GlobalManifest, file, test string) bool {
 	for _, r := range m.Coverage[file] {
 		for _, tn := range r.Tests {

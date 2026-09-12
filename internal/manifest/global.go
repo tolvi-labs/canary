@@ -67,11 +67,32 @@ func Build(repoDir string, backend coverage.Backend) (GlobalManifest, error) {
 // its ownership index can be trusted to retire a stale test name. A
 // manifest missing even one unit's entry cannot prove that unit doesn't
 // still produce a name buildFromPackages is about to consider retiring.
+//
+// A unit already in base.DegradedPackages is exempt from this
+// requirement: it has never once produced a successful build, so it is
+// known to own zero test names, not merely unaccounted-for. Without this
+// exemption a single permanently-uncompilable unit (a syntax error that
+// never gets fixed, say) would leave the index permanently incomplete —
+// and unlike every other degraded-unit accommodation in this file, a
+// full `canary init` would never clear it, since a unit that still
+// doesn't compile still can't earn a TestsByUnit entry on the next build
+// either. That would silently disable retirement for the WHOLE manifest,
+// not just the broken unit — found by review, empirically confirmed with
+// a permanently-broken fixture unit surviving two successive full builds
+// with completeness never restored.
 func testsByUnitComplete(base GlobalManifest) bool {
+	degraded := make(map[string]bool, len(base.DegradedPackages))
+	for _, d := range base.DegradedPackages {
+		degraded[d] = true
+	}
 	for _, pkg := range base.Packages {
-		if _, ok := base.TestsByUnit[pkg]; !ok {
-			return false
+		if _, ok := base.TestsByUnit[pkg]; ok {
+			continue
 		}
+		if degraded[packageDir(pkg)] {
+			continue
+		}
+		return false
 	}
 	return true
 }
