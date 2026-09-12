@@ -62,6 +62,20 @@ func Build(repoDir string, backend coverage.Backend) (GlobalManifest, error) {
 	}, backend)
 }
 
+// testsByUnitComplete reports whether base.TestsByUnit accounts for
+// every unit base already knows about — the only condition under which
+// its ownership index can be trusted to retire a stale test name. A
+// manifest missing even one unit's entry cannot prove that unit doesn't
+// still produce a name buildFromPackages is about to consider retiring.
+func testsByUnitComplete(base GlobalManifest) bool {
+	for _, pkg := range base.Packages {
+		if _, ok := base.TestsByUnit[pkg]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // Refresh re-runs coverage instrumentation only for touchedPackages and
 // merges the result into existing, replacing any prior coverage data for
 // those units — both the entries under each unit's own scope and every
@@ -142,10 +156,29 @@ func buildFromPackages(repoDir, modulePath string, packages []string, base Globa
 	// unit still produces it. A unit that fails to rebuild keeps both, so
 	// its tests are never retired on the strength of a build that didn't
 	// happen.
+	//
+	// Retirement is only trustworthy when base.TestsByUnit accounts for
+	// EVERY known unit. A partially-populated index (an older manifest
+	// upgraded mid-stream, or one built before this field existed) can
+	// only prove "this rebuilt unit no longer claims this name" — it
+	// cannot prove no *other*, unaccounted-for unit still claims it too.
+	// Treating a name as retired on that incomplete evidence would delete
+	// a live test another unit genuinely still produces the moment two
+	// units happen to share a name (found by a whole-branch review's own
+	// scoped re-review, reproduced with two Node test files sharing a
+	// test name and only one of them refreshed). So an incomplete index
+	// is handled exactly like an absent one: no retirement this round —
+	// each rebuilt unit's own entry still gets recorded fresh below,
+	// which incrementally restores completeness, and a full `canary init`
+	// restores it in one shot regardless.
+	complete := testsByUnitComplete(base)
 	testsByUnit := map[string][]string{}
 	owners := map[string]map[string]bool{}
 	for unit, names := range base.TestsByUnit {
 		testsByUnit[unit] = append([]string{}, names...)
+		if !complete {
+			continue // no ownership index while incomplete — see above
+		}
 		for _, n := range names {
 			if owners[n] == nil {
 				owners[n] = map[string]bool{}
