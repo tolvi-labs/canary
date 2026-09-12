@@ -2,7 +2,8 @@
 tags: [decision, canary]
 date: 2026-09-09
 repo: canary
-status: active
+status: superseded
+superseded_by: [[2026-09-11-canary-multi-language-coverage]]
 ticket: none
 user_impact: high
 product_area: Product scope
@@ -36,3 +37,5 @@ The 2026-07-08 reframe committed Canary's identity (vault-informed CI test selec
 ## Outcome
 
 Canary moved from pre-build to a working v1: `cmd/canary` (`init`, `audit`, `check`, `refresh`, `hook install/uninstall`), the per-test coverage engine, the `x-canary-bindings` convention, the two-manifest model, the three-tier gate with all its safe-failure paths, audit mode, and documented CI integration — all covered by real, executable tests (temp git repos and real Go fixture modules, no mocks), independently re-verified across three rounds of review (per-task, whole-branch, and a scoped re-review of the whole-branch fix wave). Dogfooded against the real `provenance` repo: a genuine two-file commit correctly narrowed 35 tests down to the 5 that actually covered the change, with correct impact attribution. Building Provenance's own docs/PLAN.md "scope (B)" prod-watch sentry, and tuning the `x-canary-bindings` glob calibration against a real dogfooding cadence, are the natural next steps.
+
+> Superseded by [[2026-09-11-canary-multi-language-coverage]] — the "v1 is Go-only, no config file" claim no longer holds; Canary added Python and Node coverage backends and a `canary.yml` config file.
