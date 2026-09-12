@@ -329,3 +329,21 @@ func FileInScope(file, scope string) bool {
 	}
 	return file == scope || strings.HasPrefix(file, scope+"/")
 }
+
+// FileOwnScope returns the ONE scope a file's own unit occupies — its
+// immediate containing directory (matching a Go package's own scope), or
+// "" for a module-root file with no "/". Unlike FileInScope, this never
+// matches an ancestor several levels up: "internal/gate/gate.go"'s own
+// scope is "internal/gate", not "internal" — a directory further up the
+// tree may itself be degraded without that degradation extending to an
+// unrelated sub-package nested inside it. Use this where the question is
+// "which single unit does this file itself belong to," and FileInScope
+// where the question is "does this degraded unit's coverage cover this
+// file" (deliberately broader — its own descendants are its own).
+func FileOwnScope(file string) string {
+	i := strings.LastIndex(file, "/")
+	if i < 0 {
+		return ""
+	}
+	return file[:i]
+}

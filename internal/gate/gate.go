@@ -93,8 +93,24 @@ func Check(
 		// excluded here; a degraded unit with zero history falls through
 		// to the same full-suite fallback as a file the manifest has
 		// never heard of at all.
+		//
+		// This check deliberately requires an exact match on the file's
+		// own unit (manifest.FileOwnScope), not FileInScope's broader
+		// ancestor-descendant match that degradedPackageTests uses below.
+		// A Go package's directory can contain an unrelated, healthy
+		// sub-package nested inside it; FileInScope would treat every
+		// file under the degraded parent's directory as "covered" by that
+		// degradation, silently exempting a genuinely unmapped sibling
+		// package's new file from this safety net (found by a
+		// whole-branch review's own scoped re-review of its fix for the
+		// symmetrical Python/Node file-shaped-unit gap this same net
+		// closes below).
+		own := manifest.FileOwnScope(file)
 		var handledByDegraded bool
-		for _, scope := range degradedScopesFor(m.DegradedPackages, file) {
+		for _, scope := range m.DegradedPackages {
+			if scope != file && scope != own {
+				continue
+			}
 			if len(manifest.AllTestsUnderPackage(m, scope)) > 0 {
 				handledByDegraded = true
 				break
