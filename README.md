@@ -26,7 +26,9 @@ language: python   # or: go, node
 
 `canary init` writes that file on its first run, auto-detecting the language from the repo's layout (`go.mod` → go, a pytest-configured `pyproject.toml` → python, any `*.test.js`/`.mjs`/`.cjs` → node). Pass `--lang` to skip detection when it would guess wrong: `canary init --lang node`. Once the file exists it is authoritative — `init`, `refresh`, and `check` all read it and never re-detect, so the gate can never disagree with the manifest about which backend built it.
 
-A language the repo shows no sign of is a hard error rather than a silent no-op: `--lang python` in a repo with no `pyproject.toml`, `setup.py`, `pytest.ini`, or test files would otherwise build an empty manifest and green-gate every later `check` having selected nothing. The same check runs on every command, so a `canary.yml` that drifts from the repo fails loudly. If `canary.yml` is unparseable or names an unknown language, fix or delete it and re-run `canary init` — nothing overwrites it automatically.
+A language the repo shows no sign of is a hard error rather than a silent no-op: `--lang python` in a repo with no `pyproject.toml`, `setup.py`, `pytest.ini`, or test files would otherwise build an empty manifest and green-gate every later `check` having selected nothing. `init`, `refresh`, and `check` all run this same validation, so a `canary.yml` that drifts from the repo fails loudly on any of them — `audit` does not, since it only reads an already-built manifest. If `canary.yml` is unparseable or names an unknown language, fix or delete it and re-run `canary init` — nothing overwrites it automatically.
+
+Commit `canary.yml` to the repo. `check` now hard-requires it, so a CI job that restores a cached `.canary/global-manifest.json` but has no committed `canary.yml` fails the gate outright.
 
 Test selection is emitted as plain test names; see [`docs/ci-integration.md`](docs/ci-integration.md) for turning them into a `go test -run`, `pytest -k`, or `node --test --test-name-pattern` invocation.
 
