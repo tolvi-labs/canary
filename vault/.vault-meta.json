@@ -1,5 +1,6 @@
 {
-  "workspace": "canary",
+  "workspace": "tolvi-labs",
+  "repo": "canary",
   "embedding_model": "nomic-embed-text",
-  "schema_version": 1
+  "schema_version": 2
 }
