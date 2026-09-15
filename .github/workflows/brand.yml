@@ -1,0 +1,21 @@
+name: brand
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  brand-isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The guard reads commit messages as well as files, so it needs the
+          # history rather than a shallow clone of the tip.
+          fetch-depth: 0
+
+      - name: Brand-isolation guard
+        run: bash .github/scripts/brand-isolation-check.sh
+        env:
+          BRAND_BLOCKLIST: ${{ vars.BRAND_BLOCKLIST }}
