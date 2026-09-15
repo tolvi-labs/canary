@@ -9,7 +9,7 @@ An OSS CLI that, given a change, emits the exact set of tests worth running — 
 
 ## The reframe (why the framing changed)
 
-Canary was originally **Compliance Canary** — a HIPAA/SOC 2 config-drift auditor. It was benched on 2026-07-04 as an *ecosystem orphan*: a real internal need, but no vault dependency and no compounding with the rest of the stack. See [[2026-07-04-canary-internal-orphan-defer]] (superseded).
+Canary was originally **Compliance Canary** — a compliance config-drift auditor. It was benched on 2026-07-04 as an *ecosystem orphan*: a real internal need, but no vault dependency and no compounding with the rest of the stack. See [[2026-07-04-canary-internal-orphan-defer]] (superseded).
 
 The path forward was to **reclaim the name for a different product**: vault-informed CI test selection, which compounds with the vault by construction. See [[2026-07-08-canary-reframe-test-selection]]. That decision assumed Canary would consume a reachability-derived impact report from Provenance. Provenance has since been repurposed to a capture-enforcement gate (see [[2026-07-22-provenance-is-the-capture-enforcement-gate]]), so Canary now **owns the impact reasoning itself** and receives declared provenance + governance from Provenance instead. Canary's identity is unchanged by this; only the boundary moved. See [[2026-07-22-canary-owns-impact-provenance-is-the-gate]].
 
