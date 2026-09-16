@@ -47,7 +47,7 @@ Guild (plan) → Bastion (harden plan) → code → Provenance (guard the record
 
 ## Immediate cleanup
 
-This plan and the build kickoff prompt were reconciled on 2026-07-22: Canary now owns the impact report, receives declared provenance + governance from Provenance (not a reachability-derived impact output), and the stale "Guild is dead" premise is removed (Guild was relaunched 2026-07-21 and shipped public 2026-07-22). The acme-site `future-projects/Canary/` material (`Compliance_Canary_BRD.docx`, `Compliance_Canary_TRD.docx`) still describes the old compliance product and needs reframing onto the test-selection thesis before the page goes public.
+This plan and the build kickoff prompt were reconciled on 2026-07-22: Canary now owns the impact report, receives declared provenance + governance from Provenance (not a reachability-derived impact output), and the stale "Guild is dead" premise is removed (Guild was relaunched 2026-07-21 and shipped public 2026-07-22).
 
 ## Next step
 

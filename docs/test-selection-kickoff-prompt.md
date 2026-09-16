@@ -12,7 +12,7 @@ READ FIRST, then summarize what you found before designing:
 - vault/decisions/2026-07-22-canary-owns-impact-provenance-is-the-gate.md  (refines the boundary: Canary owns the impact report; Provenance is now the capture-gate)
 - vault/decisions/2026-07-04-canary-internal-orphan-defer.md    (SUPERSEDED — the old Compliance Canary framing; do NOT resurrect it)
 - docs/PLAN.md                                                   (go-forward plan)
-- The sibling Provenance repo (~/tolvi-labs/provenance): it is the capture-gate at code→push; it hands Canary declared provenance + governance, NOT a reachability-derived impact report.
+- The Provenance repo: it is the capture-gate at code→push; it hands Canary declared provenance + governance, NOT a reachability-derived impact report.
 - The Tolvi and Tolvi Solo repos, to match stack, CLI conventions, and vault format.
 
 CONTEXT: Tolvi is a per-repo "decision vault" — plain-Markdown records of a team's decisions, rejected alternatives, and incidents-that-became-rules, retrievable by an agent. Provenance is the capture-enforcement gate: at push time it verifies a change's reasoning was captured, and hands Canary the declared provenance + vault governance for the change. Canary owns the impact reasoning (what the diff touches, ranked by the vault) and turns it into the EXECUTABLE test selection a CI pipeline runs.
