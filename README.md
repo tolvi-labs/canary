@@ -44,4 +44,4 @@ The full rationale is in [`docs/PLAN.md`](docs/PLAN.md) and the decisions behind
 
 ## License
 
-Apache 2.0, in line with the rest of the Tolvi suite.
+Apache 2.0, in line with the rest of the Tolvi suite. See [LICENSE](LICENSE).
